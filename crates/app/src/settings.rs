@@ -79,10 +79,8 @@ impl FlashcardsApp {
                         .text_color(if installed { theme.muted_foreground } else { theme.danger })
                         .child(if !installed {
                             "Niet geïnstalleerd".to_string()
-                        } else if option.model.ends_with("-low") {
-                            "Lagere geluidskwaliteit".to_string()
                         } else {
-                            String::new()
+                            option.note.to_string()
                         }),
                 )
                 .child(
@@ -118,7 +116,7 @@ impl FlashcardsApp {
                     .gap_3()
                     .max_w(px(640.))
                     .child(heading("Stem"))
-                    .child(hint("Kies een mannen- of vrouwenstem. Alle stemmen spreken Nederlands uit Nederland.", cx))
+                    .child(hint("Kies een mannen- of vrouwenstem. Pim, Ronnie en Alex spreken Nederlands uit Nederland, Nathalie spreekt Vlaams.", cx))
                     .child(gender_buttons)
                     .child(voices)
                     .when(missing, |d| {

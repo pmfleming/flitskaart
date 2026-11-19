@@ -47,7 +47,7 @@ day (10 by default, set in Instellingen).
 
 ```sh
 nix develop                  # or `direnv allow` once
-scripts/fetch-voices.sh      # Dutch Piper voices, ~330 MB, checksummed
+scripts/fetch-voices.sh      # Dutch Piper voices, ~250 MB, checksummed
 cargo run --release -p dutch-flashcards
 ```
 
@@ -69,11 +69,12 @@ speed) and the voices (`voices/`). Copy the folder to back it up.
 
 ## Voices
 
-All voices are Dutch from the Netherlands, generated locally by Piper.
-Male: Pim, Ronnie, Alex. Female: three readers from the multi-speaker MLS model
-and one single-speaker model in lower quality. Piper's model cards don't record
-gender, so it was measured: the male voices speak at about 125–130 Hz and the
-female ones at about 200 Hz. Try each one under Instellingen.
+Generated locally by Piper. Male: Pim, Ronnie and Alex (Dutch from the
+Netherlands). Female: Nathalie, who speaks Flemish Dutch, because Piper has no
+clear female voice from the Netherlands. Clarity was measured by having Whisper
+transcribe a test paragraph from every candidate: these four got 91–93% of the
+words right, while the female voices built from audiobook recordings (MLS) got
+0–62% and were left out. Try each one under Instellingen.
 
 ## Layout
 

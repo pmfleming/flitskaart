@@ -42,24 +42,27 @@ pub struct VoiceOption {
     pub gender: Gender,
     /// File stem of the Piper model in the voices folder.
     pub model: &'static str,
-    /// Speaker number inside a multi-speaker model.
-    pub speaker: Option<u32>,
+    /// Shown next to the name in the settings, such as the accent.
+    pub note: &'static str,
 }
 
-/// The voices on offer. All are Dutch from the Netherlands.
+/// The voices on offer: Piper's clearest Dutch voices.
 ///
-/// The model cards don't record gender, so it was measured: the male voices
-/// speak around 125–130 Hz and the female ones around 200 Hz. The female voices
-/// come from the multi-speaker MLS model (audiobook readers) plus one
-/// single-speaker model that only exists in low quality.
+/// Clarity was measured by having Whisper transcribe a test paragraph from each
+/// candidate: these four got 91–93% of the words right. The female voices built
+/// from MLS audiobook recordings got 0–62% and were dropped, which leaves
+/// Nathalie, who speaks Flemish Dutch, as the only clear female voice.
 pub const VOICES: &[VoiceOption] = &[
-    VoiceOption { id: "pim", label: "Pim", gender: Gender::Male, model: "nl_NL-pim-medium", speaker: None },
-    VoiceOption { id: "ronnie", label: "Ronnie", gender: Gender::Male, model: "nl_NL-ronnie-medium", speaker: None },
-    VoiceOption { id: "alex", label: "Alex", gender: Gender::Male, model: "nl_NL-alex-medium", speaker: None },
-    VoiceOption { id: "mls-25", label: "Vrouw 1", gender: Gender::Female, model: "nl_NL-mls-medium", speaker: Some(25) },
-    VoiceOption { id: "mls-5", label: "Vrouw 2", gender: Gender::Female, model: "nl_NL-mls-medium", speaker: Some(5) },
-    VoiceOption { id: "mls-38", label: "Vrouw 3", gender: Gender::Female, model: "nl_NL-mls-medium", speaker: Some(38) },
-    VoiceOption { id: "mls-5809", label: "Vrouw 4", gender: Gender::Female, model: "nl_NL-mls_5809-low", speaker: None },
+    VoiceOption { id: "pim", label: "Pim", gender: Gender::Male, model: "nl_NL-pim-medium", note: "" },
+    VoiceOption { id: "ronnie", label: "Ronnie", gender: Gender::Male, model: "nl_NL-ronnie-medium", note: "" },
+    VoiceOption { id: "alex", label: "Alex", gender: Gender::Male, model: "nl_NL-alex-medium", note: "" },
+    VoiceOption {
+        id: "nathalie",
+        label: "Nathalie",
+        gender: Gender::Female,
+        model: "nl_BE-nathalie-medium",
+        note: "Vlaams (België)",
+    },
 ];
 
 pub fn voice(id: &str) -> &'static VoiceOption {
@@ -104,7 +107,7 @@ impl Speaker {
     /// Where the audio for this phrase lives once generated.
     pub fn audio_path(&self, text: &str, voice: &VoiceOption, speed: Speed) -> PathBuf {
         let mut hash = Sha256::new();
-        for part in [voice.model, &voice.speaker.map_or(String::new(), |s| s.to_string()), speed.length_scale(), text.trim()] {
+        for part in [voice.model, speed.length_scale(), text.trim()] {
             hash.update(part.as_bytes());
             hash.update([0]);
         }
@@ -151,9 +154,6 @@ impl Speaker {
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
-        if let Some(speaker) = voice.speaker {
-            command.arg("--speaker").arg(speaker.to_string());
-        }
         let mut child = command.spawn().with_context(|| {
             format!("Piper kon niet starten ({}). Start de app vanuit `nix develop`.", self.piper.display())
         })?;
@@ -195,12 +195,8 @@ mod tests {
         assert_ne!(a, speaker.audio_path("Hallo!", voice("pim"), Speed::Normal));
         assert_ne!(a, speaker.audio_path("Hallo.", voice("ronnie"), Speed::Normal));
         assert_ne!(a, speaker.audio_path("Hallo.", voice("pim"), Speed::Slow));
-        assert_ne!(
-            speaker.audio_path("Hallo.", voice("mls-25"), Speed::Normal),
-            speaker.audio_path("Hallo.", voice("mls-5"), Speed::Normal)
-        );
+        assert_ne!(a, speaker.audio_path("Hallo.", voice("nathalie"), Speed::Normal));
     }
-
     #[test]
     fn unknown_voice_ids_fall_back() {
         assert_eq!(voice("gone").id, VOICES[0].id);

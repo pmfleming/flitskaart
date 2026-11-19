@@ -615,6 +615,16 @@ mod tests {
     }
 
     #[test]
+    fn a_retired_voice_loads_as_the_current_female_voice() {
+        let (_dir, store) = store();
+        let saved = Settings { gender: Gender::Female, female_voice: "mls-25".into(), ..Settings::default() };
+        store.save_settings(&saved).unwrap();
+        let loaded = store.settings().unwrap();
+        assert_eq!(loaded.voice_id(), "nathalie");
+        assert_eq!(loaded.gender, Gender::Female);
+    }
+
+    #[test]
     fn settings_persist() {
         let (dir, store) = store();
         let mut settings = store.settings().unwrap();
