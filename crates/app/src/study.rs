@@ -1,6 +1,7 @@
 //! Oefenen: show, read, score, hear.
 
 use dutch_flashcards_core::schedule::describe;
+use dutch_flashcards_core::speech::{Assessment, combine};
 use dutch_flashcards_core::store::{Counts, Mode};
 use dutch_flashcards_core::voice::Speed;
 use dutch_flashcards_core::{Card, Grade, Status};
@@ -10,6 +11,7 @@ use gpui_kit::*;
 use gpui_kit::prelude::FluentBuilder as _;
 
 use crate::app::{FlashcardsApp, Screen};
+use crate::recorder::Recording;
 use crate::ui::{empty_state, hint, keycap};
 
 /// Where the learner is within one card.
@@ -34,9 +36,17 @@ pub struct StudyState {
     pub heard: bool,
     pub english_shown: bool,
     pub peeked: bool,
-    pub intervals: [String; 4],
+    /// How far away the card would be scheduled for each grade.
+    pub previews: [chrono::Duration; 4],
     pub counts: Counts,
     pub reviewed_today: usize,
+    // Reading aloud (Spreken mode).
+    pub recording: Option<Recording>,
+    pub level: f32,
+    pub judging: bool,
+    pub speech: Option<Assessment>,
+    pub speech_note: Option<SharedString>,
+    pub has_recording: bool,
 }
 
 impl StudyState {
@@ -50,9 +60,15 @@ impl StudyState {
             heard: false,
             english_shown: false,
             peeked: false,
-            intervals: Default::default(),
+            previews: Default::default(),
             counts: Counts::default(),
             reviewed_today: 0,
+            recording: None,
+            level: 0.0,
+            judging: false,
+            speech: None,
+            speech_note: None,
+            has_recording: false,
         }
     }
 
@@ -100,8 +116,14 @@ impl FlashcardsApp {
         study.heard = false;
         study.english_shown = false;
         study.peeked = false;
-        study.intervals = match &card {
-            Some(card) => self.scheduler.preview(&card.schedule, Self::now()).map(describe),
+        study.recording = None;
+        study.level = 0.0;
+        study.judging = false;
+        study.speech = None;
+        study.speech_note = None;
+        study.has_recording = false;
+        study.previews = match &card {
+            Some(card) => self.scheduler.preview(&card.schedule, Self::now()),
             None => Default::default(),
         };
         study.card = card;
@@ -132,7 +154,15 @@ impl FlashcardsApp {
         if self.study.card.is_none() {
             return;
         }
+        if self.study.recording.is_some() {
+            self.stop_recording();
+            return;
+        }
+        if self.study.judging {
+            return;
+        }
         match self.study.step {
+            Step::Read if self.can_record() => self.start_recording(cx),
             Step::Read | Step::Listen => self.study.step = Step::Score,
             Step::Score => {}
             Step::Hear if !self.study.heard => self.hear(Speed::Normal, cx),
@@ -142,7 +172,7 @@ impl FlashcardsApp {
     }
 
     fn grade(&mut self, grade: Grade, cx: &mut Context<Self>) {
-        if self.study.card.is_none() || !matches!(self.study.step, Step::Score | Step::Hear) {
+        if self.study.card.is_none() || self.busy_listening() || !matches!(self.study.step, Step::Score | Step::Hear) {
             return;
         }
         self.study.grade = Some(grade);
@@ -176,10 +206,20 @@ impl FlashcardsApp {
     }
 
     /// Saves the score and moves to the next card.
-    fn commit(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn commit(&mut self, cx: &mut Context<Self>) {
+        if self.busy_listening() {
+            return;
+        }
         let (Some(card), Some(grade)) = (self.study.card.as_ref(), self.study.grade) else { return };
-        let result =
-            self.store.record_review(card.id, grade, self.study.mode, self.study.peeked, &self.scheduler, Self::now());
+        let result = self.store.record_review(
+            card.id,
+            grade,
+            self.study.speech.as_ref(),
+            self.study.mode,
+            self.study.peeked,
+            &self.scheduler,
+            Self::now(),
+        );
         if let Err(err) = result {
             self.error(format!("De beoordeling is niet bewaard: {err:#}"));
             return;
@@ -210,6 +250,13 @@ impl FlashcardsApp {
         match key {
             "space" => self.advance(cx),
             "enter" if self.study.step == Step::Hear => self.commit(cx),
+            "enter" if self.study.step == Step::Read && self.study.recording.is_none() && !self.study.judging => {
+                self.study.step = Step::Score;
+                cx.notify();
+            }
+            "escape" if self.study.recording.is_some() => self.cancel_recording(cx),
+            "r" => self.record_again(cx),
+            "o" => self.play_own_recording(cx),
             "1" | "2" | "3" | "4" => {
                 if let Some(grade) = key.parse().ok().and_then(Grade::from_number) {
                     self.grade(grade, cx);
@@ -307,7 +354,9 @@ impl FlashcardsApp {
             ""
         };
 
+        let recording_controls = (study.step == Step::Read && self.can_record()).then(|| self.render_recording_controls(cx));
         let (prompt, primary) = match study.step {
+            Step::Read if recording_controls.is_some() => ("", None),
             Step::Read if study.mode == Mode::Speak => ("Lees de kaart hardop.", Some("Gelezen")),
             Step::Read => ("Lees de kaart in stilte.", Some("Gelezen")),
             Step::Listen => ("Luister. Wat hoor je?", Some("Toon tekst")),
@@ -317,6 +366,7 @@ impl FlashcardsApp {
         };
 
         let actions = h_flex()
+            .when(recording_controls.is_some(), |d| d.hidden())
             .gap_3()
             .justify_center()
             .when(!prompt.is_empty(), |d| d.child(hint(prompt, cx)))
@@ -345,6 +395,8 @@ impl FlashcardsApp {
                 )
             });
 
+        let speech_grade = study.speech.as_ref().map(|s| s.grade);
+        let speech_panel = study.speech.is_some().then(|| self.render_speech_panel(cx));
         let grades = matches!(study.step, Step::Score | Step::Hear).then(|| {
             let colors = [theme.danger, theme.warning, theme.blue, theme.success];
             h_flex().gap_2().w_full().max_w(px(600.)).children(Grade::ALL.iter().enumerate().map(|(i, grade)| {
@@ -371,7 +423,7 @@ impl FlashcardsApp {
                             .text_xs()
                             .text_color(theme.muted_foreground)
                             .child(keycap(&grade.number().to_string(), cx))
-                            .child(study.intervals[i].clone()),
+                            .child(describe(study.previews[combine(grade, speech_grade).number() as usize - 1])),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.grade(grade, cx);
@@ -439,6 +491,8 @@ impl FlashcardsApp {
                         d.child(div().max_w(px(560.)).text_center().text_color(theme.muted_foreground).child(card.note.clone()))
                     })
                     .children(english)
+                    .children(speech_panel)
+                    .children(recording_controls)
                     .child(actions)
                     .children(grades),
             )

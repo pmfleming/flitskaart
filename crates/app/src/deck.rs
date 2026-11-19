@@ -142,6 +142,7 @@ impl FlashcardsApp {
                     .child(div().w(px(110.)).child("Volgende keer"))
                     .child(div().w(px(56.)).text_right().child("Fout"))
                     .child(div().w(px(70.)).text_right().child("Vertaling"))
+                    .child(div().w(px(76.)).text_right().child("Uitspraak"))
                     .child(div().w(px(250.))),
             )
             .child(body)
@@ -218,6 +219,13 @@ impl FlashcardsApp {
             .child(div().w(px(110.)).text_sm().child(due))
             .child(div().w(px(56.)).text_sm().text_right().child(card.misses.to_string()))
             .child(div().w(px(70.)).text_sm().text_right().child(card.peeks.to_string()))
+            .child(
+                div()
+                    .w(px(76.))
+                    .text_sm()
+                    .text_right()
+                    .child(card.speech_accuracy.map_or("–".to_string(), |a| format!("{:.0}%", a * 100.0))),
+            )
             .child(h_flex().w(px(250.)).justify_end().child(actions))
     }
 

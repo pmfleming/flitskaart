@@ -5,6 +5,7 @@ pub mod drafting;
 pub mod model;
 pub mod paths;
 pub mod schedule;
+pub mod speech;
 pub mod store;
 pub mod voice;
 

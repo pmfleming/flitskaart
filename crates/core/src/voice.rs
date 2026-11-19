@@ -137,7 +137,7 @@ impl Speaker {
         }
         if !self.is_installed(voice) {
             return Err(anyhow!(
-                "De stem {} is niet geïnstalleerd. Voer scripts/fetch-voices.sh uit.",
+                "De stem {} is niet geïnstalleerd. Voer scripts/fetch-models.sh uit.",
                 voice.label
             ));
         }

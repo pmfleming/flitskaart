@@ -5,7 +5,9 @@ mod app;
 mod audio;
 mod deck;
 mod drafts;
+mod recorder;
 mod settings;
+mod speaking;
 mod study;
 mod ui;
 
@@ -16,12 +18,14 @@ use gpui_kit::*;
 /// Developer flags for screenshots and checks:
 /// `--screen <oefenen|toevoegen|concepten|kaarten|instellingen>` opens that screen,
 /// `--keys "space 3"` replays study shortcuts after start-up,
-/// `--appearance <systeem|licht|donker>` overrides the colours for this run only.
+/// `--appearance <systeem|licht|donker>` overrides the colours for this run only,
+/// `--recording <file.wav>` uses a WAV file instead of the microphone.
 #[derive(Default)]
 struct DevArgs {
     screen: Option<String>,
     keys: Vec<String>,
     appearance: Option<Appearance>,
+    recording: Option<std::path::PathBuf>,
 }
 
 fn dev_args() -> DevArgs {
@@ -31,6 +35,7 @@ fn dev_args() -> DevArgs {
         match arg.as_str() {
             "--screen" => out.screen = args.next(),
             "--keys" => out.keys = args.next().unwrap_or_default().split_whitespace().map(String::from).collect(),
+            "--recording" => out.recording = args.next().map(Into::into),
             "--appearance" => out.appearance = args.next().as_deref().and_then(Appearance::parse),
             other => {
                 eprintln!("Onbekende optie: {other}");
@@ -71,6 +76,7 @@ fn main() {
             gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| {
                     let mut app = app::FlashcardsApp::new(store, paths, window, cx);
+                    app.fake_recording = dev.recording.clone();
                     if let Some(appearance) = dev.appearance {
                         app.settings.appearance = appearance;
                         app.apply_appearance(window, cx);

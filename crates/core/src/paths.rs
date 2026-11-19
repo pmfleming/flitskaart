@@ -39,12 +39,25 @@ impl Paths {
         self.root.join("audio")
     }
 
-    /// Piper voice models. `scripts/fetch-voices.sh` fills it.
+    /// Piper voice models. `scripts/fetch-models.sh` fills it.
     pub fn voices(&self) -> PathBuf {
         if let Some(dir) = std::env::var_os("DUTCH_FLASHCARDS_VOICES") {
             return PathBuf::from(dir);
         }
         self.root.join("voices")
+    }
+
+    /// The Whisper speech recognizer. `scripts/fetch-models.sh` fills it.
+    pub fn models(&self) -> PathBuf {
+        if let Some(dir) = std::env::var_os("DUTCH_FLASHCARDS_MODELS") {
+            return PathBuf::from(dir);
+        }
+        self.root.join("models")
+    }
+
+    /// The learner's latest recordings.
+    pub fn recordings(&self) -> PathBuf {
+        self.root.join("recordings")
     }
 
     pub fn ensure(&self) -> std::io::Result<()> {

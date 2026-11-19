@@ -5,6 +5,7 @@ use std::time::Duration;
 use chrono::Utc;
 use dutch_flashcards_core::paths::Paths;
 use dutch_flashcards_core::schedule::Scheduler;
+use dutch_flashcards_core::speech::Listener;
 use dutch_flashcards_core::store::{Appearance, Settings};
 use dutch_flashcards_core::voice::{self, Speaker, Speed, VoiceOption};
 use dutch_flashcards_core::Store;
@@ -53,6 +54,9 @@ pub struct FlashcardsApp {
     pub store: Store,
     pub scheduler: Scheduler,
     pub speaker: Speaker,
+    pub listener: Listener,
+    /// A WAV file used in place of the microphone (`--recording`), for checks.
+    pub fake_recording: Option<std::path::PathBuf>,
     pub settings: Settings,
     pub paths: Paths,
     pub audio: Audio,
@@ -83,6 +87,8 @@ impl FlashcardsApp {
             _appearance_changed: appearance_changed,
             scheduler: Scheduler::default(),
             speaker: Speaker::new(&paths),
+            listener: Listener::new(&paths),
+            fake_recording: None,
             study: StudyState::new(settings.mode, cx),
             add: AddState::new(window, cx),
             deck: DeckState::new(window, cx),
@@ -275,9 +281,29 @@ impl FlashcardsApp {
                 None => self.error(format!("Onbekend scherm: {name}")),
             }
         }
-        for key in keys {
+        self.replay_keys(keys.to_vec(), window, cx);
+    }
+
+    /// Replays study keys; `wacht` waits until recording and listening are done.
+    fn replay_keys(&mut self, mut keys: Vec<String>, window: &mut Window, cx: &mut Context<Self>) {
+        while !keys.is_empty() {
+            let key = keys.remove(0);
+            if key == "wacht" {
+                cx.spawn_in(window, async move |this, cx| {
+                    loop {
+                        cx.background_executor().timer(Duration::from_millis(100)).await;
+                        let busy = this.update(cx, |this, _| this.busy_listening()).unwrap_or(false);
+                        if !busy {
+                            break;
+                        }
+                    }
+                    let _ = this.update_in(cx, |this, window, cx| this.replay_keys(keys, window, cx));
+                })
+                .detach();
+                return;
+            }
             if self.screen == Screen::Study {
-                self.study_key(key, window, cx);
+                self.study_key(&key, window, cx);
             }
         }
     }

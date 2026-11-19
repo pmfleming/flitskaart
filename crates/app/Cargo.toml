@@ -11,4 +11,4 @@ dutch-flashcards-core = { path = "../core" }
 anyhow.workspace = true
 chrono.workspace = true
 gpui_kit = { package = "gpui_ce_kit", version = "0.3.0" }
-rodio = { version = "0.23.0", default-features = false, features = ["playback", "wav"] }
+rodio = { version = "0.23.0", default-features = false, features = ["playback", "recording", "wav"] }

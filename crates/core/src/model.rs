@@ -88,6 +88,8 @@ pub struct Card {
     pub reviews: i64,
     pub misses: i64,
     pub peeks: i64,
+    /// How understandable the learner was the last time they read it aloud, 0.0–1.0.
+    pub speech_accuracy: Option<f32>,
 }
 
 impl Card {

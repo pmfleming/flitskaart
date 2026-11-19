@@ -7,6 +7,7 @@ use turso::{Connection, Value};
 use crate::model::{Card, CardId, Grade, NewCard, Status, normalize};
 use crate::paths::Paths;
 use crate::schedule::{Scheduler, new_schedule};
+use crate::speech::{Assessment, combine};
 use crate::voice::{Gender, VOICES};
 
 const SCHEMA: &str = "
@@ -50,7 +51,20 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 ";
 
-const CARD_COLUMNS: &str = "id, dutch, english, note, tags, status, snippet_id, created_at, due, schedule, reviews, misses, peeks";
+/// Columns added after the first release, added to older deck files on open.
+const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
+    // The learner's own grade; `grade` holds the one that scheduled the card.
+    ("reviews", "own_grade", "INTEGER"),
+    // How understandable the learner was when reading aloud, if recorded.
+    ("reviews", "speech_grade", "INTEGER"),
+    ("reviews", "speech_accuracy", "REAL"),
+    ("reviews", "heard", "TEXT"),
+    // The latest understandability, for the deck list.
+    ("cards", "speech_accuracy", "REAL"),
+];
+
+const CARD_COLUMNS: &str =
+    "id, dutch, english, note, tags, status, snippet_id, created_at, due, schedule, reviews, misses, peeks, speech_accuracy";
 
 /// How a review was done, kept with each review for later analysis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,8 +183,20 @@ impl Store {
             let db = turso::Builder::new_local(path).build().await.with_context(|| format!("opening {path}"))?;
             let conn = db.connect()?;
             conn.execute_batch(SCHEMA).await.context("creating tables")?;
-            Ok(Store { _db: db, conn })
+            let store = Store { _db: db, conn };
+            store.add_missing_columns()?;
+            Ok(store)
         })
+    }
+
+    fn add_missing_columns(&self) -> Result<()> {
+        for (table, column, kind) in ADDED_COLUMNS {
+            let existing = self.rows(&format!("PRAGMA table_info({table})"), vec![])?;
+            if !existing.iter().any(|row| text(&row[1]) == *column) {
+                self.exec(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"), vec![])?;
+            }
+        }
+        Ok(())
     }
 
     // ---- snippets and drafts ----
@@ -338,35 +364,50 @@ impl Store {
     }
 
     /// Saves a review and reschedules the card.
+    ///
+    /// `own` is how well the learner says they knew the card. When they read it
+    /// aloud, `speech` says how understandable they were, and the lower of the
+    /// two grades schedules the card.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_review(
         &self,
         id: CardId,
-        grade: Grade,
+        own: Grade,
+        speech: Option<&Assessment>,
         mode: Mode,
         peeked: bool,
         scheduler: &Scheduler,
         now: DateTime<Utc>,
     ) -> Result<Card> {
         let card = self.card(id)?.ok_or_else(|| anyhow!("card {id} no longer exists"))?;
+        let grade = combine(own, speech.map(|s| s.grade));
         let schedule = scheduler.apply(&card.schedule, now, grade);
+        let accuracy = speech.map_or(Value::Null, |s| Value::Real(f64::from(s.accuracy)));
         self.exec(
             "UPDATE cards SET schedule = ?2, due = ?3, reviews = reviews + 1,
-                 misses = misses + ?4, peeks = peeks + ?5, first_review_at = COALESCE(first_review_at, ?6)
+                 misses = misses + ?4, peeks = peeks + ?5, first_review_at = COALESCE(first_review_at, ?6),
+                 speech_accuracy = COALESCE(?7, speech_accuracy)
              WHERE id = ?1",
             vec![
                 Value::Integer(id),
                 serde_json::to_string(&schedule)?.into(),
                 stamp(schedule.due).into(),
-                Value::Integer(i64::from(grade == Grade::DontKnow)),
+                Value::Integer(i64::from(own == Grade::DontKnow)),
                 Value::Integer(i64::from(peeked)),
                 stamp(now).into(),
+                accuracy.clone(),
             ],
         )?;
         self.exec(
-            "INSERT INTO reviews (card_id, grade, mode, peeked, reviewed_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO reviews (card_id, grade, own_grade, speech_grade, speech_accuracy, heard, mode, peeked, reviewed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             vec![
                 Value::Integer(id),
                 Value::Integer(i64::from(grade.number())),
+                Value::Integer(i64::from(own.number())),
+                speech.map_or(Value::Null, |s| Value::Integer(i64::from(s.grade.number()))),
+                accuracy,
+                speech.map_or(Value::Null, |s| Value::Text(s.heard.clone())),
                 mode.as_str().into(),
                 Value::Integer(i64::from(peeked)),
                 stamp(now).into(),
@@ -472,6 +513,11 @@ fn card_from_row(row: &[Value]) -> Result<Card> {
         reviews: integer(&row[10]),
         misses: integer(&row[11]),
         peeks: integer(&row[12]),
+        speech_accuracy: match row[13] {
+            Value::Real(n) => Some(n as f32),
+            Value::Integer(n) => Some(n as f32),
+            _ => None,
+        },
     })
 }
 
@@ -553,13 +599,13 @@ mod tests {
         let id = store.add_drafts(None, &[new_card("Ik heb er zin in.")], now).unwrap()[0];
         store.accept(id, now).unwrap();
         let scheduler = Scheduler::default();
-        let card = store.record_review(id, Grade::DontKnow, Mode::Speak, true, &scheduler, now).unwrap();
+        let card = store.record_review(id, Grade::DontKnow, None, Mode::Speak, true, &scheduler, now).unwrap();
         assert_eq!((card.reviews, card.misses, card.peeks), (1, 1, 1));
         assert!(card.due.unwrap() > now);
         // Comes back later in the session, not now.
         assert_eq!(store.counts(now, 10).unwrap().due, 0);
         assert_eq!(store.next_card(now, 10).unwrap().map(|c| c.id), Some(id), "learn-ahead within 20 minutes");
-        let card = store.record_review(id, Grade::Easy, Mode::Silent, false, &scheduler, card.due.unwrap()).unwrap();
+        let card = store.record_review(id, Grade::Easy, None, Mode::Silent, false, &scheduler, card.due.unwrap()).unwrap();
         assert!(card.due.unwrap() - now > Duration::hours(12));
         assert!(store.next_card(now + Duration::hours(1), 10).unwrap().is_none());
     }
@@ -574,8 +620,8 @@ mod tests {
             store.accept(*id, now).unwrap();
         }
         assert_eq!(store.counts(now, 2).unwrap().new, 2);
-        store.record_review(ids[0], Grade::Easy, Mode::Speak, false, &scheduler, now).unwrap();
-        store.record_review(ids[1], Grade::Easy, Mode::Speak, false, &scheduler, now).unwrap();
+        store.record_review(ids[0], Grade::Easy, None, Mode::Speak, false, &scheduler, now).unwrap();
+        store.record_review(ids[1], Grade::Easy, None, Mode::Speak, false, &scheduler, now).unwrap();
         assert_eq!(store.counts(now, 2).unwrap().new, 0);
         assert!(store.next_card(now, 2).unwrap().is_none());
     }
@@ -602,7 +648,7 @@ mod tests {
         let scheduler = Scheduler::default();
         let id = store.add_drafts(None, &[new_card("Het huis is groot.")], now).unwrap()[0];
         store.accept(id, now).unwrap();
-        store.record_review(id, Grade::Hard, Mode::Speak, false, &scheduler, now).unwrap();
+        store.record_review(id, Grade::Hard, None, Mode::Speak, false, &scheduler, now).unwrap();
         store.set_suspended(id, true).unwrap();
         assert!(store.next_card(now + Duration::days(30), 10).unwrap().is_none());
         store.set_suspended(id, false).unwrap();
@@ -612,6 +658,53 @@ mod tests {
         assert!(store.deck("auto").unwrap().is_empty());
         store.delete(id).unwrap();
         assert!(store.card(id).unwrap().is_none());
+    }
+
+    #[test]
+    fn unclear_speech_brings_a_known_card_back_sooner() {
+        let (_dir, store) = store();
+        let now = Utc::now();
+        let scheduler = Scheduler::default();
+        let ids = store.add_drafts(None, &[new_card("Ik heb kaas gekocht."), new_card("Ik heb brood gekocht.")], now).unwrap();
+        for id in &ids {
+            store.accept(*id, now).unwrap();
+        }
+        let clear = crate::speech::assess("Ik heb kaas gekocht.", "Ik heb kaas gekocht.");
+        let unclear = crate::speech::assess("Ik heb brood gekocht.", "Ik heb gekocht.");
+        let a = store.record_review(ids[0], Grade::Easy, Some(&clear), Mode::Speak, false, &scheduler, now).unwrap();
+        let b = store.record_review(ids[1], Grade::Easy, Some(&unclear), Mode::Speak, false, &scheduler, now).unwrap();
+        assert!(b.due.unwrap() < a.due.unwrap());
+        assert_eq!(a.speech_accuracy, Some(1.0));
+        assert!(b.speech_accuracy.unwrap() < 0.85);
+        assert_eq!(b.misses, 0, "a miss means not knowing the card, not unclear speech");
+        let saved = store
+            .rows("SELECT grade, own_grade, speech_grade, heard FROM reviews WHERE card_id = ?1", vec![Value::Integer(ids[1])])
+            .unwrap();
+        assert_eq!(integer(&saved[0][1]), 4);
+        assert_eq!(integer(&saved[0][0]), integer(&saved[0][2]));
+        assert_eq!(text(&saved[0][3]), "Ik heb gekocht.");
+    }
+
+    #[test]
+    fn opens_a_deck_made_before_speech_was_judged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cards.db").to_string_lossy().to_string();
+        // SCHEMA is the original layout; the speech columns are added on open.
+        pollster::block_on(async {
+            let db = turso::Builder::new_local(&path).build().await.unwrap();
+            let conn = db.connect().unwrap();
+            conn.execute_batch(SCHEMA).await.unwrap();
+            conn.execute("INSERT INTO reviews (card_id, grade, mode, peeked, reviewed_at) VALUES (1, 3, 'speak', 0, 'x')", ())
+                .await
+                .unwrap();
+        });
+        let store = Store::open_file(&path).unwrap();
+        let rows = store.rows("SELECT grade, own_grade, speech_accuracy FROM reviews", vec![]).unwrap();
+        assert_eq!(integer(&rows[0][0]), 3);
+        assert_eq!(rows[0][1], Value::Null);
+        // Opening again finds the columns already there.
+        drop(store);
+        Store::open_file(&path).unwrap();
     }
 
     #[test]

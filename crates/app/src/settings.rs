@@ -120,7 +120,23 @@ impl FlashcardsApp {
                     .child(gender_buttons)
                     .child(voices)
                     .when(missing, |d| {
-                        d.child(hint("Ontbrekende stemmen installeer je met scripts/fetch-voices.sh.", cx))
+                        d.child(hint("Ontbrekende stemmen installeer je met scripts/fetch-models.sh.", cx))
+                    }),
+            )
+            .child(
+                v_flex()
+                    .gap_3()
+                    .max_w(px(640.))
+                    .child(heading("Uitspraak"))
+                    .child(hint(
+                        "In de stand Spreken neem je jezelf op. Whisper luistert op deze laptop en geeft je uitspraak een cijfer van 1 tot 4. \
+                         De laagste van je eigen beoordeling en je uitspraak bepaalt wanneer de kaart terugkomt.",
+                        cx,
+                    ))
+                    .child(if self.listener.is_installed() {
+                        hint("Spraakherkenning is geïnstalleerd.", cx)
+                    } else {
+                        hint("Spraakherkenning ontbreekt. Installeer die met scripts/fetch-models.sh.", cx).text_color(theme.danger)
                     }),
             )
             .child(

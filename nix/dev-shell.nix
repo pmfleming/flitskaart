@@ -28,6 +28,7 @@ in pkgs.mkShell {
     gcc
     pkg-config
     piper-tts # Speaks the Dutch on each card.
+    whisper-cpp-vulkan # Hears the learner read a card aloud (runs on the GPU).
     weston # Headless compositor for window checks and screenshots.
   ];
 
