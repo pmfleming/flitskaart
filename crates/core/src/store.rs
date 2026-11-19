@@ -78,6 +78,39 @@ impl Mode {
     }
 }
 
+/// Light or dark window colours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Appearance {
+    /// Follow the desktop's light or dark setting.
+    System,
+    Light,
+    Dark,
+}
+
+impl Appearance {
+    pub const ALL: [Appearance; 3] = [Appearance::System, Appearance::Light, Appearance::Dark];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Appearance::System => "systeem",
+            Appearance::Light => "licht",
+            Appearance::Dark => "donker",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Appearance> {
+        Appearance::ALL.into_iter().find(|a| a.as_str() == value)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Appearance::System => "Systeem",
+            Appearance::Light => "Licht",
+            Appearance::Dark => "Donker",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub new_per_day: u32,
@@ -85,6 +118,7 @@ pub struct Settings {
     pub male_voice: String,
     pub female_voice: String,
     pub mode: Mode,
+    pub appearance: Appearance,
 }
 
 impl Default for Settings {
@@ -95,6 +129,7 @@ impl Default for Settings {
             male_voice: VOICES.iter().find(|v| v.gender == Gender::Male).unwrap().id.into(),
             female_voice: VOICES.iter().find(|v| v.gender == Gender::Female).unwrap().id.into(),
             mode: Mode::Speak,
+            appearance: Appearance::System,
         }
     }
 }
@@ -369,6 +404,7 @@ impl Store {
                 "male_voice" if VOICES.iter().any(|v| v.id == value) => settings.male_voice = value,
                 "female_voice" if VOICES.iter().any(|v| v.id == value) => settings.female_voice = value,
                 "mode" => settings.mode = Mode::parse(&value),
+                "appearance" => settings.appearance = Appearance::parse(&value).unwrap_or(settings.appearance),
                 _ => {}
             }
         }
@@ -382,6 +418,7 @@ impl Store {
             ("male_voice", settings.male_voice.clone()),
             ("female_voice", settings.female_voice.clone()),
             ("mode", settings.mode.as_str().to_string()),
+            ("appearance", settings.appearance.as_str().to_string()),
         ];
         for (key, value) in pairs {
             self.exec(
@@ -585,6 +622,7 @@ mod tests {
         settings.gender = Gender::Female;
         settings.new_per_day = 4;
         settings.mode = Mode::Listen;
+        settings.appearance = Appearance::Dark;
         store.save_settings(&settings).unwrap();
         store.save_settings(&settings).unwrap();
         drop(store);
