@@ -1,0 +1,430 @@
+<title>Dutch Flashcard Mockup</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600&family=Noto+Sans+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: one desktop app window, centred, with a tab strip on top. Palette follows the user's existing egui apps. */
+  :root {
+    --page: #e4e9f1;
+    --win: #ffffff;
+    --header: #f0f3f8;
+    --panel: #f6f8fb;
+    --action: #e6ecf4;
+    --action-hover: #d9e2ee;
+    --selected: #dbe7f8;
+    --border: #c9d2de;
+    --fg: #171b22;
+    --muted: #586474;
+    --accent: #4376cd;
+    --on-accent: #ffffff;
+    --again: #b0413e;
+    --hard: #8f6410;
+    --easy: #2f7a3e;
+    --font: "Noto Sans", "Segoe UI", system-ui, sans-serif;
+    --mono: "Noto Sans Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --page: #0f1115; --win: #15181d; --header: #181b21; --panel: #1b1f26; --action: #262b32;
+      --action-hover: #343a44; --selected: #222b3b; --border: #3b424c; --fg: #eef1f5; --muted: #a0adb5;
+      --accent: #689ae8; --on-accent: #0f1115; --again: #e59393; --hard: #dcb45c; --easy: #8cc896;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --page: #0f1115; --win: #15181d; --header: #181b21; --panel: #1b1f26; --action: #262b32;
+    --action-hover: #343a44; --selected: #222b3b; --border: #3b424c; --fg: #eef1f5; --muted: #a0adb5;
+    --accent: #689ae8; --on-accent: #0f1115; --again: #e59393; --hard: #dcb45c; --easy: #8cc896;
+    color-scheme: dark;
+  }
+
+  body { background: var(--page); color: var(--fg); font-family: var(--font); font-size: 15px; line-height: 1.5; }
+  .page {
+    max-width: 920px; margin: 0 auto; padding-block: 28px 48px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .intro { display: flex; flex-direction: column; gap: 4px; }
+  h1 { font-size: 1.3rem; font-weight: 600; margin: 0; text-wrap: balance; }
+  .intro p { margin: 0; color: var(--muted); max-width: 72ch; }
+  kbd { font-family: var(--mono); font-size: 0.8em; font-weight: 400; color: var(--muted); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--win); white-space: nowrap; }
+
+  .window { background: var(--win); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; min-height: 580px; }
+  .titlebar { background: var(--header); border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; align-items: stretch; }
+  .tab { font: inherit; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 16px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .tab:hover { background: var(--action); }
+  .tab[aria-selected="true"] { color: var(--fg); background: var(--selected); border-bottom-color: var(--accent); font-weight: 500; }
+  .badge { font-family: var(--mono); font-size: 0.72rem; background: var(--accent); color: var(--on-accent); border-radius: 9px; padding: 0 6px; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .screen { flex: 1; display: flex; flex-direction: column; gap: 16px; padding: 18px; min-width: 0; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .center { justify-content: center; }
+  .spread { justify-content: space-between; }
+  .muted { color: var(--muted); }
+  .small { font-size: 0.85rem; }
+
+  .btn { font: inherit; color: var(--fg); background: var(--action); border: 1px solid var(--border); border-radius: 5px; padding: 6px 12px; cursor: pointer; }
+  .btn:hover { background: var(--action-hover); }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 500; }
+  .btn.quiet { background: none; border-color: transparent; color: var(--muted); }
+  .btn.quiet:hover:not(:disabled) { background: var(--action); color: var(--fg); }
+
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
+  .seg button { font: inherit; color: var(--muted); background: var(--win); border: 0; padding: 5px 12px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button[aria-pressed="true"] { background: var(--selected); color: var(--fg); font-weight: 500; }
+
+  /* study */
+  .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 22px; font-size: 0.85rem; color: var(--muted); counter-reset: step; }
+  .steps li { counter-increment: step; padding-bottom: 3px; border-bottom: 2px solid transparent; }
+  .steps li::before { content: counter(step) "  "; font-family: var(--mono); font-size: 0.78rem; }
+  .steps li[aria-current="step"] { color: var(--fg); font-weight: 500; border-bottom-color: var(--accent); }
+  .stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 16px 8px; }
+  .card-nl { font-size: clamp(1.5rem, 4.2vw, 2.2rem); font-weight: 500; line-height: 1.25; max-width: 22ch; text-wrap: balance; }
+  .card-nl.veiled { color: var(--muted); letter-spacing: 0.3em; }
+  .card-note { color: var(--muted); max-width: 46ch; }
+  .card-en { border-top: 1px dashed var(--border); padding-top: 10px; color: var(--muted); font-style: italic; max-width: 46ch; }
+  .playing { font-family: var(--mono); font-size: 0.8rem; color: var(--accent); min-height: 1.4em; }
+  .grades { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; width: 100%; max-width: 560px; }
+  .grade { font: inherit; background: var(--panel); border: 1px solid var(--border); border-top: 3px solid currentColor; border-radius: 5px; padding: 8px 4px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; align-items: center; min-width: 0; }
+  .grade:hover { background: var(--action); }
+  .grade[aria-pressed="true"] { background: var(--selected); border-color: currentColor; }
+  .grade b { font-weight: 500; color: var(--fg); }
+  .grade span { font-family: var(--mono); font-size: 0.75rem; color: var(--muted); }
+  .g1 { color: var(--again); } .g2 { color: var(--hard); } .g3 { color: var(--accent); } .g4 { color: var(--easy); }
+  @media (max-width: 480px) { .grades { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .toolbar { border-top: 1px solid var(--border); padding-top: 12px; }
+
+  /* add + drafts + deck */
+  label { font-size: 0.85rem; color: var(--muted); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  textarea, input[type="text"] { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px; width: 100%; box-sizing: border-box; min-width: 0; }
+  textarea { min-height: 190px; resize: vertical; line-height: 1.5; }
+  .draft { border: 1px solid var(--border); border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 8px; background: var(--panel); }
+  .draft .nl-input { font-size: 1.05rem; font-weight: 500; background: var(--win); }
+  .flag { font-size: 0.8rem; color: var(--hard); }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 0.78rem; font-weight: 500; color: var(--muted); white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.nowrap { white-space: nowrap; }
+  tr.hl td { background: var(--selected); }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+</style>
+
+<div class="page">
+  <div class="intro">
+    <h1>How the app could look</h1>
+    <p>A clickable sketch with sample cards. One review goes: read the card aloud and press <kbd>Space</kbd>, score yourself with <kbd>1</kbd> to <kbd>4</kbd>, then press <kbd>Space</kbd> to hear it. <kbd>V</kbd> shows the English. Nothing is saved and no sound plays here.</p>
+  </div>
+
+  <div class="window">
+    <div class="titlebar" role="tablist">
+      <button class="tab" role="tab" data-tab="study" aria-selected="true">Oefenen</button>
+      <button class="tab" role="tab" data-tab="add" aria-selected="false">Toevoegen</button>
+      <button class="tab" role="tab" data-tab="drafts" aria-selected="false">Concepten <span class="badge" id="draft-count">3</span></button>
+      <button class="tab" role="tab" data-tab="deck" aria-selected="false">Kaarten</button>
+    </div>
+
+    <!-- Oefenen -->
+    <div class="screen" id="screen-study">
+      <div class="row spread">
+        <div class="seg" id="modes">
+          <button data-mode="speak" aria-pressed="true">Spreken</button>
+          <button data-mode="silent" aria-pressed="false">Stil</button>
+          <button data-mode="listen" aria-pressed="false">Luisteren</button>
+        </div>
+        <span class="muted small" id="progress"></span>
+      </div>
+
+      <div class="stage" id="stage">
+        <ol class="steps" id="steps"></ol>
+        <div class="card-nl" id="card-nl"></div>
+        <div class="playing" id="playing"></div>
+        <div class="card-note" id="card-note" hidden></div>
+        <div class="card-en" id="card-en" hidden></div>
+        <div class="row center">
+          <span class="muted" id="hint"></span>
+          <button class="btn primary" id="primary-btn"></button>
+          <button class="btn" id="skip-btn" hidden>Volgende <kbd>Enter</kbd></button>
+        </div>
+        <div class="grades" id="grades" hidden>
+          <button class="grade g1" data-grade="1" aria-pressed="false"><b>Weet ik niet</b><span id="iv1"></span></button>
+          <button class="grade g2" data-grade="2" aria-pressed="false"><b>Moeilijk</b><span id="iv2"></span></button>
+          <button class="grade g3" data-grade="3" aria-pressed="false"><b>Gaat goed</b><span id="iv3"></span></button>
+          <button class="grade g4" data-grade="4" aria-pressed="false"><b>Makkelijk</b><span id="iv4"></span></button>
+        </div>
+      </div>
+
+      <div class="stage" id="done" hidden>
+        <div class="card-nl">Klaar voor vandaag</div>
+        <div class="muted">Morgen staan er 7 kaarten klaar.</div>
+        <button class="btn" id="restart-btn">Voorbeeld opnieuw</button>
+      </div>
+
+      <div class="row center toolbar" id="study-tools">
+        <button class="btn quiet" id="tr-btn">Vertaling <kbd>V</kbd></button>
+        <button class="btn quiet" id="again-btn">Herhaal <kbd>H</kbd></button>
+        <button class="btn quiet" id="slow-btn">Langzaam <kbd>L</kbd></button>
+        <button class="btn quiet" id="edit-btn">Bewerken <kbd>B</kbd></button>
+      </div>
+    </div>
+
+    <!-- Toevoegen -->
+    <div class="screen" id="screen-add" hidden>
+      <label for="snippet">Plak hier een stuk van je gesprek
+        <textarea id="snippet">Ik: Ik woon voor drie jaar in Utrecht.
+Claude: Bijna! We zeggen: "Ik woon al drie jaar in Utrecht." With "al", Dutch uses the present tense for something that is still going on.
+Ik: Ik vind het moeilijk Nederlands spreken.
+Claude: Goed geprobeerd. Beter: "Ik vind het moeilijk om Nederlands te spreken."
+Ik: Mag ik de rekening, alstublieft?
+Claude: Perfect.</textarea>
+      </label>
+      <label for="steer">Aanwijzing (optioneel)
+        <input type="text" id="steer" placeholder="bijvoorbeeld: alleen de correcties">
+      </label>
+      <div class="row">
+        <button class="btn primary" id="make-btn">Maak kaarten</button>
+        <span class="muted small" id="make-status">Of typ zelf regels als: Nederlands | English</span>
+      </div>
+    </div>
+
+    <!-- Concepten -->
+    <div class="screen" id="screen-drafts" hidden>
+      <div class="row spread">
+        <span class="muted small">Controleer elke kaart voordat hij in je stapel komt.</span>
+        <button class="btn" id="accept-all">Alles bewaren</button>
+      </div>
+      <div id="draft-list" style="display:flex;flex-direction:column;gap:10px"></div>
+      <div class="empty" id="drafts-empty" hidden>Geen concepten. Plak een gesprek bij Toevoegen.</div>
+    </div>
+
+    <!-- Kaarten -->
+    <div class="screen" id="screen-deck" hidden>
+      <label for="search">Zoeken
+        <input type="text" id="search" placeholder="woord of zin">
+      </label>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Nederlands</th><th>Volgende keer</th><th class="num">Fouten</th><th class="num">Vertaling bekeken</th><th></th></tr></thead>
+          <tbody id="deck-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+
+  var cards = [
+    { nl: 'Ik ben gisteren naar de markt gegaan.', en: 'I went to the market yesterday.', note: '"Gaan" krijgt "zijn" in de voltooide tijd, niet "hebben".', iv: ['10 min', '2 dagen', '5 dagen', '12 dagen'], due: 'vandaag', miss: 2, peek: 1 },
+    { nl: 'Mag ik de rekening, alstublieft?', en: 'Could I have the bill, please?', note: 'Beleefd. Informeel zeg je "alsjeblieft".', iv: ['10 min', '4 dagen', '9 dagen', '3 weken'], due: 'vandaag', miss: 0, peek: 0 },
+    { nl: 'Ik heb er zin in.', en: 'I am looking forward to it.', note: '"Zin hebben in" betekent: iets graag willen.', iv: ['10 min', '1 dag', '3 dagen', '8 dagen'], due: 'vandaag', miss: 3, peek: 4 },
+    { nl: 'Het huis staat aan het einde van de straat.', en: 'The house is at the end of the street.', note: '"Huis" is een het-woord.', iv: ['10 min', '6 dagen', '2 weken', '5 weken'], due: 'vandaag', miss: 1, peek: 0 },
+    { nl: 'Kun je dat nog een keer zeggen?', en: 'Can you say that once more?', note: '', iv: ['10 min', '2 dagen', '4 dagen', '10 dagen'], due: 'vandaag', miss: 0, peek: 1 }
+  ];
+  var deckExtra = [
+    { nl: 'Ik moet nog boodschappen doen.', en: 'I still have to do the shopping.', due: 'over 3 dagen', miss: 1, peek: 0 },
+    { nl: 'Hoe laat vertrekt de trein naar Leiden?', en: 'What time does the train to Leiden leave?', due: 'over 12 dagen', miss: 0, peek: 0 },
+    { nl: 'Dat maakt me niet uit.', en: 'I do not mind.', due: 'over 5 weken', miss: 0, peek: 2 }
+  ];
+  var drafts = [
+    { nl: 'Ik woon al drie jaar in Utrecht.', en: 'I have lived in Utrecht for three years.', note: 'Met "al" gebruik je de tegenwoordige tijd.' },
+    { nl: 'Ik vind het moeilijk om Nederlands te spreken.', en: 'I find it hard to speak Dutch.', note: '"Om ... te" met het hele werkwoord.' },
+    { nl: 'Mag ik de rekening, alstublieft?', en: 'Could I have the bill, please?', note: '', dup: true }
+  ];
+
+  /* The review cycle per mode. Speaking: show, read, score, hear. */
+  var FLOW = { speak: ['read', 'score', 'hear'], silent: ['read', 'score'], listen: ['listen', 'score'] };
+  var STEP_NAME = { read: 'Lezen', score: 'Beoordelen', hear: 'Luisteren', listen: 'Luisteren' };
+
+  var tab = 'study', mode = 'speak', idx = 0, step = 'read', graded = 0, heard = false, highlight = -1, playTimer = null;
+
+  /* tabs */
+  function showTab(name) {
+    tab = name;
+    ['study', 'add', 'drafts', 'deck'].forEach(function (t) { $('screen-' + t).hidden = t !== name; });
+    document.querySelectorAll('.tab').forEach(function (b) { b.setAttribute('aria-selected', String(b.dataset.tab === name)); });
+    if (name === 'deck') renderDeck();
+    if (name === 'drafts') renderDrafts();
+  }
+  document.querySelectorAll('.tab').forEach(function (b) { b.addEventListener('click', function () { showTab(b.dataset.tab); }); });
+
+  /* study */
+  function audioAllowed() { return idx < cards.length && (mode === 'listen' || (mode === 'speak' && step === 'hear')); }
+  function play(label) {
+    if (!audioAllowed()) return;
+    $('playing').textContent = label;
+    clearTimeout(playTimer);
+    playTimer = setTimeout(function () { $('playing').textContent = ''; }, 1400);
+    if (step === 'hear' && !heard) { heard = true; renderStudy(); }
+  }
+  function setPrimary(label) {
+    var b = $('primary-btn'); b.hidden = !label; b.textContent = '';
+    if (!label) return;
+    b.appendChild(document.createTextNode(label + ' '));
+    var k = document.createElement('kbd'); k.textContent = 'Spatie'; b.appendChild(k);
+  }
+  function renderStudy() {
+    var finished = idx >= cards.length;
+    $('stage').hidden = finished; $('done').hidden = !finished; $('study-tools').hidden = finished;
+    $('progress').textContent = finished ? '' : 'Kaart ' + (idx + 1) + ' van ' + cards.length;
+    if (finished) return;
+    var c = cards[idx], veiled = step === 'listen';
+
+    var ol = $('steps'); ol.textContent = '';
+    FLOW[mode].forEach(function (s) {
+      var li = document.createElement('li'); li.textContent = STEP_NAME[s];
+      if (s === step) li.setAttribute('aria-current', 'step');
+      ol.appendChild(li);
+    });
+
+    $('card-nl').textContent = veiled ? '• • •' : c.nl;
+    $('card-nl').classList.toggle('veiled', veiled);
+    $('card-note').textContent = c.note;
+    $('card-note').hidden = !c.note || step === FLOW[mode][0];
+
+    var hint = '', primary = '';
+    if (step === 'read') { hint = mode === 'speak' ? 'Lees de kaart hardop.' : 'Lees de kaart in stilte.'; primary = 'Gelezen'; }
+    else if (step === 'listen') { hint = 'Luister. Wat hoor je?'; primary = 'Toon tekst'; }
+    else if (step === 'score') { hint = 'Hoe ging het?'; }
+    else if (step === 'hear') { hint = heard ? '' : 'Hoor hoe het klinkt.'; primary = heard ? 'Volgende' : 'Luister'; }
+    $('hint').textContent = hint; setPrimary(primary);
+    $('skip-btn').hidden = !(step === 'hear' && !heard);
+
+    $('grades').hidden = !(step === 'score' || step === 'hear');
+    document.querySelectorAll('.grade').forEach(function (b) { b.setAttribute('aria-pressed', String(Number(b.dataset.grade) === graded)); });
+    for (var i = 0; i < 4; i++) $('iv' + (i + 1)).textContent = c.iv[i];
+
+    $('again-btn').disabled = !audioAllowed(); $('slow-btn').disabled = !audioAllowed();
+  }
+  function startCard() {
+    step = FLOW[mode][0]; graded = 0; heard = false;
+    $('card-en').hidden = true; $('playing').textContent = '';
+    renderStudy();
+    if (step === 'listen') play('speelt af');
+  }
+  function next() {
+    if (graded === 1) cards[idx].miss++;
+    idx++; startCard();
+  }
+  function primaryAction() {
+    if (idx >= cards.length) return;
+    if (step === 'read' || step === 'listen') { step = 'score'; renderStudy(); }
+    else if (step === 'hear') { if (heard) next(); else play('speelt af'); }
+  }
+  function grade(n) {
+    if (idx >= cards.length || (step !== 'score' && step !== 'hear')) return;
+    graded = n;
+    if (mode === 'speak') { step = 'hear'; renderStudy(); } else next();
+  }
+  function toggleEnglish() {
+    if (idx >= cards.length) return;
+    var el = $('card-en');
+    if (el.hidden) { el.textContent = cards[idx].en; cards[idx].peek++; }
+    el.hidden = !el.hidden;
+  }
+  function editCurrent() { if (idx < cards.length) { highlight = idx; showTab('deck'); } }
+
+  $('primary-btn').addEventListener('click', primaryAction);
+  $('skip-btn').addEventListener('click', next);
+  $('restart-btn').addEventListener('click', function () { idx = 0; startCard(); });
+  $('tr-btn').addEventListener('click', toggleEnglish);
+  $('again-btn').addEventListener('click', function () { play('speelt af'); });
+  $('slow-btn').addEventListener('click', function () { play('speelt langzaam af'); });
+  $('edit-btn').addEventListener('click', editCurrent);
+  document.querySelectorAll('.grade').forEach(function (b) { b.addEventListener('click', function () { grade(Number(b.dataset.grade)); }); });
+  document.querySelectorAll('#modes button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      mode = b.dataset.mode;
+      document.querySelectorAll('#modes button').forEach(function (o) { o.setAttribute('aria-pressed', String(o === b)); });
+      startCard();
+    });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (tab !== 'study' || e.ctrlKey || e.metaKey || e.altKey) return;
+    var t = e.target.tagName;
+    if (t === 'INPUT' || t === 'TEXTAREA') return;
+    var k = e.key.toLowerCase();
+    if (k === ' ') { e.preventDefault(); primaryAction(); }
+    else if (k === 'enter') { if (step === 'hear' && idx < cards.length) { e.preventDefault(); next(); } }
+    else if (k >= '1' && k <= '4') grade(Number(k));
+    else if (k === 'v') toggleEnglish();
+    else if (k === 'h') play('speelt af');
+    else if (k === 'l') play('speelt langzaam af');
+    else if (k === 'b') editCurrent();
+  });
+
+  /* add */
+  $('make-btn').addEventListener('click', function () {
+    $('make-status').textContent = 'Claude maakt kaarten…';
+    setTimeout(function () {
+      $('make-status').textContent = 'Of typ zelf regels als: Nederlands | English';
+      showTab('drafts');
+    }, 900);
+  });
+
+  /* drafts */
+  function field(cls, value, labelText) {
+    var input = document.createElement('input');
+    input.type = 'text'; input.value = value; input.className = cls; input.setAttribute('aria-label', labelText);
+    return input;
+  }
+  function button(text, cls, fn) {
+    var b = document.createElement('button');
+    b.className = cls; b.textContent = text; b.addEventListener('click', fn);
+    return b;
+  }
+  function renderDrafts() {
+    var list = $('draft-list'); list.textContent = '';
+    drafts.forEach(function (d, i) {
+      var box = document.createElement('div'); box.className = 'draft';
+      var nl = field('nl-input', d.nl, 'Nederlands');
+      nl.addEventListener('input', function () { d.nl = nl.value; });
+      var note = field('', d.note, 'Uitleg'); note.placeholder = 'Uitleg (optioneel)';
+      note.addEventListener('input', function () { d.note = note.value; });
+      var en = field('', d.en, 'Vertaling'); en.hidden = true;
+      en.addEventListener('input', function () { d.en = en.value; });
+      box.appendChild(nl); box.appendChild(note); box.appendChild(en);
+      if (d.dup) { var f = document.createElement('div'); f.className = 'flag'; f.textContent = 'Deze kaart staat al in je stapel.'; box.appendChild(f); }
+      var row = document.createElement('div'); row.className = 'row';
+      row.appendChild(button('Bewaar', 'btn primary', function () { accept(i); }));
+      row.appendChild(button('Weggooien', 'btn', function () { drafts.splice(i, 1); renderDrafts(); }));
+      row.appendChild(button('Luister', 'btn quiet', function () {}));
+      row.appendChild(button('Vertaling', 'btn quiet', function () { en.hidden = !en.hidden; }));
+      box.appendChild(row); list.appendChild(box);
+    });
+    $('draft-count').textContent = drafts.length; $('draft-count').hidden = drafts.length === 0;
+    $('drafts-empty').hidden = drafts.length !== 0; $('accept-all').hidden = drafts.length === 0;
+  }
+  function accept(i) {
+    var d = drafts.splice(i, 1)[0];
+    if (!d.dup) deckExtra.unshift({ nl: d.nl, en: d.en, due: 'nieuw', miss: 0, peek: 0 });
+    renderDrafts();
+  }
+  $('accept-all').addEventListener('click', function () { while (drafts.length) accept(0); });
+
+  /* deck */
+  function renderDeck() {
+    var q = $('search').value.trim().toLowerCase(), body = $('deck-body'); body.textContent = '';
+    cards.concat(deckExtra).forEach(function (c, i) {
+      if (q && c.nl.toLowerCase().indexOf(q) === -1) return;
+      var tr = document.createElement('tr'); if (i === highlight) tr.className = 'hl';
+      [[c.nl, ''], [c.due, 'nowrap'], [c.miss, 'num'], [c.peek, 'num']].forEach(function (cell) {
+        var td = document.createElement('td'); td.textContent = cell[0]; td.className = cell[1]; tr.appendChild(td);
+      });
+      var td = document.createElement('td'); td.className = 'nowrap';
+      td.appendChild(button('Bewerken', 'btn quiet', function () {})); tr.appendChild(td);
+      body.appendChild(tr);
+    });
+  }
+  $('search').addEventListener('input', renderDeck);
+
+  renderDrafts();
+  startCard();
+})();
+</script>

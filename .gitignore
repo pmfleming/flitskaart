@@ -1,0 +1,7 @@
+/target/
+/result
+/.direnv/
+/data/
+*.db
+*.db-wal
+*.db-shm

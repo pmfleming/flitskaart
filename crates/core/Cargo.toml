@@ -1,0 +1,20 @@
+[package]
+name = "dutch-flashcards-core"
+description = "Cards, scheduling, storage, voice and drafting for the Dutch flashcards app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+pollster.workspace = true
+rs-fsrs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+turso.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

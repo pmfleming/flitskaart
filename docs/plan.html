@@ -1,0 +1,339 @@
+<title>Dutch Flashcard Plan</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap">
+<style>
+  /* Layout: one reading column; the app's own Dutch screens appear as small mock panels inside it. */
+  :root {
+    --bg: #f4f6fb;
+    --surface: #ffffff;
+    --fg: #121a2c;
+    --muted: #56617b;
+    --line: #d4dbe9;
+    --accent: #1d3f9e;        /* Delft blue */
+    --accent-soft: #e2e9fa;
+    --again: #b3372f;
+    --hard: #9a6a0c;
+    --good: #1d3f9e;
+    --easy: #1f7a4d;
+    --font-display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+    --font-body: "Inter", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1220; --surface: #161d31; --fg: #e7ebf6; --muted: #9ba7c3; --line: #2a3452;
+      --accent: #93acf6; --accent-soft: #1c2950;
+      --again: #f08a80; --hard: #e0b352; --good: #93acf6; --easy: #6fcf9c;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1220; --surface: #161d31; --fg: #e7ebf6; --muted: #9ba7c3; --line: #2a3452;
+    --accent: #93acf6; --accent-soft: #1c2950;
+    --again: #f08a80; --hard: #e0b352; --good: #93acf6; --easy: #6fcf9c;
+    color-scheme: dark;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.6;
+  }
+  .page {
+    max-width: 780px;
+    margin: 0 auto;
+    padding-block: 48px 72px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex;
+    flex-direction: column;
+    gap: 44px;
+  }
+  section, header { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.2; }
+  h1 { font-size: 2.1rem; font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; font-weight: 600; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.05rem; font-weight: 600; margin-top: 10px; }
+  p, ul, ol { margin: 0; }
+  ul, ol { padding-left: 1.25em; display: flex; flex-direction: column; gap: 6px; }
+  .lede { font-size: 1.1rem; color: var(--muted); max-width: 62ch; }
+  .eyebrow { font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+  .nl { font-style: italic; }
+  .en { color: var(--muted); }
+  code, kbd { font-family: var(--font-mono); font-size: 0.86em; }
+  code { background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+  kbd { border: 1px solid var(--line); border-bottom-width: 2px; background: var(--surface); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+
+  /* card journey */
+  .journey { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 10px; counter-reset: step; }
+  .journey li { counter-increment: step; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .journey li::before { content: counter(step); font-family: var(--font-mono); font-size: 0.75rem; color: var(--accent); }
+  .journey strong { font-family: var(--font-display); font-weight: 600; }
+  .journey span { font-size: 0.86rem; color: var(--muted); line-height: 1.45; }
+
+  /* mock screens */
+  .mocks { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 12px; }
+  .mock { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .mock-step { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .mock-card { font-family: var(--font-display); font-size: 1.12rem; font-weight: 500; line-height: 1.3; min-height: 3.9em; }
+  .mock-hint { font-size: 0.82rem; color: var(--muted); }
+  .mock-en { font-size: 0.86rem; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 8px; }
+  .grades { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .grade { font-size: 0.78rem; font-weight: 500; text-align: center; padding: 5px 4px; border-radius: 6px; border: 1px solid currentColor; }
+  .g1 { color: var(--again); } .g2 { color: var(--hard); } .g3 { color: var(--good); } .g4 { color: var(--easy); }
+  .caption { font-size: 0.86rem; color: var(--muted); }
+
+  /* tables */
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); }
+  th { font-family: var(--font-mono); font-size: 0.72rem; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  td:first-child { white-space: nowrap; font-weight: 500; }
+  .status-ok { color: var(--easy); font-weight: 500; }
+  .status-todo { color: var(--hard); font-weight: 500; }
+
+  .phases { padding-left: 1.4em; gap: 12px; }
+  .phases li::marker { font-family: var(--font-mono); color: var(--accent); }
+  .phases strong { font-family: var(--font-display); }
+
+  .confirm { background: var(--accent-soft); border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
+  .confirm h2 { border: 0; padding: 0; }
+</style>
+
+<div class="page">
+
+  <header>
+    <span class="eyebrow">Build plan · 19 November 2026</span>
+    <h1>Dutch flashcards from your conversations</h1>
+    <p class="lede">A small app on this laptop. You paste snippets from your Claude, ChatGPT or Gemini conversations, it drafts Dutch cards, you approve them, and it brings each card back at longer and longer gaps as you get it right. You read the card aloud, score yourself, then hear it.</p>
+  </header>
+
+  <section>
+    <h2>What is settled</h2>
+    <ul>
+      <li><strong>Dutch only.</strong> English is stored with each card but stays hidden until you ask for it.</li>
+      <li><strong>This laptop only.</strong> It runs locally in its own desktop window.</li>
+      <li><strong>You grade yourself</strong> with four buttons. No AI listens to or judges your speech.</li>
+      <li><strong>Cards come from pasted snippets.</strong> Claude Code turns them into drafts, using your subscription and no API key.</li>
+      <li><strong>Nothing enters the deck unreviewed.</strong> Every draft passes through an edit screen first.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>How a card travels</h2>
+    <ol class="journey">
+      <li><strong>Plakken</strong><span>You paste a piece of conversation into the Add screen.</span></li>
+      <li><strong>Drafting</strong><span>Claude Code turns it into up to six draft cards.</span></li>
+      <li><strong>Concepten</strong><span>You edit, listen, then accept or discard each draft.</span></li>
+      <li><strong>Voice</strong><span>On accept, the Dutch audio is made once and saved.</span></li>
+      <li><strong>Oefenen</strong><span>The card appears in study whenever it is due.</span></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>The four screens</h2>
+
+    <h3>Oefenen (study)</h3>
+    <div class="mocks">
+      <div class="mock">
+        <span class="mock-step">1 · Read it aloud</span>
+        <div class="mock-card">Ik ben gisteren naar de markt gegaan.</div>
+        <span class="mock-hint">Lees hardop · <kbd>Spatie</kbd> als je klaar bent</span>
+      </div>
+      <div class="mock">
+        <span class="mock-step">2 · Score yourself</span>
+        <div class="mock-card">Ik ben gisteren naar de markt gegaan.</div>
+        <div class="grades">
+          <span class="grade g1">Weet ik niet</span>
+          <span class="grade g2">Moeilijk</span>
+          <span class="grade g3">Gaat goed</span>
+          <span class="grade g4">Makkelijk</span>
+        </div>
+      </div>
+      <div class="mock">
+        <span class="mock-step">3 · Ask to hear it</span>
+        <div class="mock-card">Ik ben gisteren naar de markt gegaan.</div>
+        <span class="mock-hint"><kbd>Spatie</kbd> om te luisteren</span>
+      </div>
+    </div>
+    <p class="caption">The cycle for every card: it is shown, you read it, you score it, you hear it. Each step waits for you. Pressing <kbd>V</kbd> at any step shows the English under the card.</p>
+    <ul>
+      <li>Reading is its own step. You press <kbd>Spatie</kbd> to say you have read the card, and only then do the score buttons appear.</li>
+      <li>The app speaks only when you ask it to, after you have scored.</li>
+      <li>You can change your score after hearing the card, until you move to the next one.</li>
+    </ul>
+
+    <p>Three modes, switched from the top of the screen:</p>
+    <ul>
+      <li><strong>Spreken:</strong> the cycle above. You read aloud, score yourself, then ask to hear it.</li>
+      <li><strong>Stil:</strong> read and score only, with no sound, for the train or the office.</li>
+      <li><strong>Luisteren:</strong> the audio plays first with the text hidden. You reveal the Dutch to check what you heard.</li>
+    </ul>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Key</th><th>Dutch label</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><kbd>Spatie</kbd></td><td>Gelezen, Luister, Volgende</td><td>Confirms you have read the card. After scoring, plays the card. After that, moves on</td></tr>
+          <tr><td><kbd>1</kbd> to <kbd>4</kbd></td><td>the four grades</td><td>Scores the card</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>Volgende</td><td>Moves on without hearing the card</td></tr>
+          <tr><td><kbd>V</kbd></td><td>Vertaling</td><td>Shows the English for this card</td></tr>
+          <tr><td><kbd>H</kbd></td><td>Herhaal</td><td>Plays the audio again</td></tr>
+          <tr><td><kbd>L</kbd></td><td>Langzaam</td><td>Plays the slower recording</td></tr>
+          <tr><td><kbd>B</kbd></td><td>Bewerken</td><td>Opens the card for editing mid-review</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Toevoegen (add)</h3>
+    <ul>
+      <li>One large box. Paste anything: Dutch and English mixed, corrections, explanations.</li>
+      <li>An optional steering line, such as <span class="nl">alleen de correcties</span> or a different card limit.</li>
+      <li>Lines typed as <code>Nederlands | English</code> skip Claude and become drafts directly.</li>
+    </ul>
+
+    <h3>Concepten (drafts)</h3>
+    <ul>
+      <li>Each draft is a row with the Dutch, the note and the hidden English, all editable in place.</li>
+      <li>A play button lets you hear the Dutch before you accept it.</li>
+      <li>Accept, discard, or accept all.</li>
+      <li>A draft that matches a card already in the deck is flagged.</li>
+      <li>The original snippet stays attached so you can see where a card came from.</li>
+    </ul>
+
+    <h3>Kaarten (deck)</h3>
+    <ul>
+      <li>A searchable list of every card, filterable by tag and by date added.</li>
+      <li>Edit any field. Changing the Dutch regenerates the audio.</li>
+      <li>Suspend, delete, or reset a card's schedule.</li>
+      <li>Each row shows when the card is next due, how often you missed it, and how often you asked for the English.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What "Dutch only" means in practice</h2>
+    <ul>
+      <li>The face of every card is Dutch. There are no English-first cards.</li>
+      <li>Notes on a card are written in simple Dutch, for example: <span class="nl">"Gaan" krijgt "zijn" in de voltooide tijd, niet "hebben".</span></li>
+      <li>The interface labels are in Dutch too.</li>
+      <li>The English translation is written when the card is drafted and shown only when you press <kbd>V</kbd>.</li>
+      <li>Each time you ask for the English, the card counts it. A card you keep peeking at is one you do not really know yet, and the deck screen shows that.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Scheduling</h2>
+    <p>The four buttons feed FSRS, the scheduler modern Anki uses. It comes from an open-source library, so none of the maths is written by hand.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Button</th><th>Your word</th><th>Effect on the next showing</th></tr></thead>
+        <tbody>
+          <tr><td class="g1">Weet ik niet</td><td>Don't know</td><td>Comes back later in the same session and starts again from a short gap</td></tr>
+          <tr><td class="g2">Moeilijk</td><td>Hard</td><td>The gap grows only a little</td></tr>
+          <tr><td class="g3">Gaat goed</td><td>Comfortable</td><td>The gap grows at the normal rate</td></tr>
+          <tr><td class="g4">Makkelijk</td><td>Easy</td><td>The gap grows fastest</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul>
+      <li>A daily limit on new cards, starting at 10, keeps a session short. You can change it.</li>
+      <li>Due cards come first, then new ones.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>The voice</h2>
+    <ul>
+      <li><strong>Piper</strong> speaks the cards. It runs on the laptop, costs nothing and has Dutch voices from the Netherlands and Flanders.</li>
+      <li>Each card's audio is generated once and saved as a file, so playback is instant and works offline.</li>
+      <li>Slow replay is a second recording spoken at a slower pace, so the pitch stays natural.</li>
+      <li>There is no online fallback. Without Piper, cards still work in silent mode.</li>
+    </ul>
+    <p class="caption">Not yet done: I have not listened to the Dutch Piper voices. Choosing the best-sounding one is the first job of the voice phase.</p>
+  </section>
+
+  <section>
+    <h2>Making cards from a snippet</h2>
+    <p>The app hands your snippet to Claude Code in the background with a fixed set of rules and gets back a structured list of cards.</p>
+    <ul>
+      <li><strong>What it looks for, in order:</strong> corrections of your own mistakes, then new phrases, then single words placed in a short sentence.</li>
+      <li><strong>Card rules:</strong> whole phrases a person would say, nouns always with <span class="nl">de</span> or <span class="nl">het</span>, one short Dutch note at most, and a hidden English translation.</li>
+      <li><strong>Limit:</strong> six cards per snippet by default, so the deck stays worth reviewing.</li>
+      <li><strong>Cost:</strong> each paste is one small request against your Claude subscription.</li>
+      <li><strong>Spare:</strong> Codex is also installed here and can stand in if you would rather spend ChatGPT usage.</li>
+    </ul>
+    <p class="caption">I have not timed a drafting request yet. Expect a wait of some seconds per paste, during which the screen shows that it is working.</p>
+  </section>
+
+  <section>
+    <h2>What it is built from</h2>
+    <p>Rust and Turso as in your other apps. The interface toolkit is the one new piece.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Part</th><th>Choice</th><th>On this laptop</th></tr></thead>
+        <tbody>
+          <tr><td>Language</td><td>Rust</td><td><span class="status-ok">Your usual setup</span>, a Nix flake per project</td></tr>
+          <tr><td>Storage</td><td>Turso, one local file</td><td><span class="status-ok">In use</span> in your other projects (0.8.3)</td></tr>
+          <tr><td>Window</td><td>GPUI Community Edition, with egui as the fallback</td><td><span class="status-todo">To try</span> in a first experiment</td></tr>
+          <tr><td>Card drafting</td><td>Claude Code, structured output</td><td><span class="status-ok">Installed</span> (2.1.328)</td></tr>
+          <tr><td>Scheduler</td><td>FSRS library for Rust</td><td><span class="status-todo">To add</span></td></tr>
+          <tr><td>Voice</td><td>Piper plus one Dutch voice file</td><td><span class="status-todo">To install</span> through Nix (version 1.4.2 is available)</td></tr>
+          <tr><td>Sound</td><td>Audio playback library for Rust</td><td><span class="status-todo">To add</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul>
+      <li>One program and one window. No browser and no local web server.</li>
+      <li>Your whole deck is one database file plus a folder of audio, both in <code>data/</code>, easy to copy as a backup.</li>
+      <li>You start it like any other app on the laptop.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What a card stores</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Field</th><th>Holds</th></tr></thead>
+        <tbody>
+          <tr><td>Dutch</td><td>The phrase shown and spoken</td></tr>
+          <tr><td>English</td><td>The translation, hidden until requested</td></tr>
+          <tr><td>Note</td><td>One short explanation in simple Dutch, optional</td></tr>
+          <tr><td>Source</td><td>The snippet it came from, and the date</td></tr>
+          <tr><td>Tags</td><td>Topic labels for filtering</td></tr>
+          <tr><td>Status</td><td>Draft, active or suspended</td></tr>
+          <tr><td>Schedule</td><td>Next due date and the scheduler's memory of the card</td></tr>
+          <tr><td>History</td><td>Every grade you gave, and how often you asked for the English</td></tr>
+          <tr><td>Audio</td><td>The saved recording of the Dutch</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Build order</h2>
+    <p>Each step leaves you with something you can use.</p>
+    <ol class="phases">
+      <li><strong>Interface experiment.</strong> One window in GPUI Community Edition that shows a card, takes typed text and plays a sound, built on this laptop. If that goes well the app uses it, and if not the app uses egui. The card logic is kept separate from the interface, so the choice can change later.</li>
+      <li><strong>Study loop.</strong> The deck, typed-in cards, the four grades, the scheduler, the Dutch interface and silent mode. You can study from the first day.</li>
+      <li><strong>Voice.</strong> Piper, saved audio, the reveal that speaks, slow replay and listening mode.</li>
+      <li><strong>Paste to drafts.</strong> The Add screen, drafting through Claude Code, and the Drafts review screen.</li>
+      <li><strong>Deck housekeeping.</strong> The card list, search, editing mid-review, suspend and reset, and the peek counts.</li>
+      <li><strong>Later, if you want them.</strong> Recording yourself to compare with the app's voice. Gap cards, where one word of a Dutch sentence is blanked, as a Dutch-only way to practise recall. A one-click backup.</li>
+    </ol>
+  </section>
+
+  <section class="confirm">
+    <h2>Five assumptions to confirm</h2>
+    <p>I made these choices to finish the plan. Each is easy to reverse before building starts.</p>
+    <ol>
+      <li>The interface labels are in Dutch, as well as the cards.</li>
+      <li>Asking for the English is counted but does not change the grade you can give.</li>
+      <li>The voice is from the Netherlands, with Flemish as an alternative.</li>
+      <li>Notes are written in simple Dutch, with no English version kept.</li>
+      <li>It is built in Rust with Turso as a desktop window. The interface uses GPUI Community Edition if the first experiment goes well, and egui if not.</li>
+    </ol>
+  </section>
+
+</div>
