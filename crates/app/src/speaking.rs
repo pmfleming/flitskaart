@@ -35,14 +35,14 @@ impl FlashcardsApp {
         self.stop_audio();
         self.study.speech_note = None;
         if let Some(path) = self.fake_recording.clone() {
-            match recorder::from_file(&path) {
+            match recorder::from_file(&path, self.settings.input_boost) {
                 Ok(captured) => self.judge(captured, cx),
                 Err(err) => self.study.speech_note = Some(format!("{err:#}").into()),
             }
             cx.notify();
             return;
         }
-        self.study.recording = Some(Recording::start());
+        self.study.recording = Some(Recording::start(self.settings.input_boost));
         cx.notify();
         // Refresh the level meter until the recording ends by itself or is stopped.
         cx.spawn(async move |this, cx| {

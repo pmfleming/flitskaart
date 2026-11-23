@@ -34,13 +34,14 @@ pub struct Recording {
 }
 
 impl Recording {
-    pub fn start() -> Recording {
+    /// Starts recording; every sample is multiplied by `boost`.
+    pub fn start(boost: f32) -> Recording {
         let stop = Arc::new(AtomicBool::new(false));
         let level = Arc::new(AtomicU32::new(0));
         let speaking = Arc::new(AtomicBool::new(false));
         let thread = {
             let (stop, level, speaking) = (stop.clone(), level.clone(), speaking.clone());
-            std::thread::spawn(move || record(&stop, &level, &speaking))
+            std::thread::spawn(move || record(boost, &stop, &level, &speaking))
         };
         Recording { stop, level, speaking, thread: Some(thread) }
     }
@@ -78,7 +79,7 @@ impl Drop for Recording {
     }
 }
 
-fn record(stop: &AtomicBool, level: &AtomicU32, speaking: &AtomicBool) -> Result<Captured> {
+fn record(boost: f32, stop: &AtomicBool, level: &AtomicU32, speaking: &AtomicBool) -> Result<Captured> {
     let mut mic = rodio::microphone::MicrophoneBuilder::new()
         .default_device()
         .context("Geen microfoon gevonden")?
@@ -100,7 +101,7 @@ fn record(stop: &AtomicBool, level: &AtomicU32, speaking: &AtomicBool) -> Result
 
     while !stop.load(Ordering::Relaxed) && elapsed < MAX_LENGTH {
         chunk.clear();
-        chunk.extend(mic.by_ref().take(block));
+        chunk.extend(mic.by_ref().take(block).map(|s| amplify(s, boost)));
         if chunk.len() < block {
             break; // The device stopped.
         }
@@ -135,13 +136,18 @@ fn record(stop: &AtomicBool, level: &AtomicU32, speaking: &AtomicBool) -> Result
 }
 
 /// Reads a WAV file as if it had been recorded, for checks without a microphone.
-pub fn from_file(path: &std::path::Path) -> Result<Captured> {
+pub fn from_file(path: &std::path::Path, boost: f32) -> Result<Captured> {
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let decoder = rodio::Decoder::try_from(file)?;
     let rate = decoder.sample_rate().get();
     let channels = decoder.channels().get();
     let device = path.file_name().map(|name| format!("{} (testbestand)", name.to_string_lossy()));
-    Ok(Captured { samples: decoder.collect(), rate, channels, had_speech: true, device })
+    Ok(Captured { samples: decoder.map(|s| amplify(s, boost)).collect(), rate, channels, had_speech: true, device })
+}
+
+/// Applies the input boost; a sample pushed past full scale is cut off there.
+fn amplify(sample: f32, boost: f32) -> f32 {
+    (sample * boost).clamp(-1.0, 1.0)
 }
 
 /// The name of the system's default input device.
@@ -195,6 +201,14 @@ mod tests {
             .map(|i| amplitude * (i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin())
             .collect();
         Captured { samples, rate, channels: 1, had_speech: true, device: None }
+    }
+
+    #[test]
+    fn the_boost_scales_samples_and_cuts_them_off_at_full_scale() {
+        assert_eq!(amplify(0.2, 0.5), 0.1);
+        assert_eq!(amplify(0.2, 2.0), 0.4);
+        assert_eq!(amplify(0.6, 2.5), 1.0);
+        assert_eq!(amplify(-0.6, 2.5), -1.0);
     }
 
     #[test]

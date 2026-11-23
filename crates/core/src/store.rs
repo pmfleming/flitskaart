@@ -127,6 +127,14 @@ impl Appearance {
     }
 }
 
+/// The input boost steps offered in Instellingen.
+pub const INPUT_BOOSTS: [f32; 5] = [0.5, 1.0, 1.5, 2.0, 2.5];
+
+/// The allowed input boost nearest to `value`.
+pub fn snap_input_boost(value: f32) -> f32 {
+    INPUT_BOOSTS.into_iter().min_by(|a, b| (a - value).abs().total_cmp(&(b - value).abs())).unwrap()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub new_per_day: u32,
@@ -135,6 +143,8 @@ pub struct Settings {
     pub female_voice: String,
     pub mode: Mode,
     pub appearance: Appearance,
+    /// How much recordings are amplified before they are judged; one of [`INPUT_BOOSTS`].
+    pub input_boost: f32,
 }
 
 impl Default for Settings {
@@ -146,6 +156,7 @@ impl Default for Settings {
             female_voice: VOICES.iter().find(|v| v.gender == Gender::Female).unwrap().id.into(),
             mode: Mode::Read,
             appearance: Appearance::System,
+            input_boost: 1.0,
         }
     }
 }
@@ -450,6 +461,7 @@ impl Store {
                 "female_voice" if VOICES.iter().any(|v| v.id == value) => settings.female_voice = value,
                 "mode" => settings.mode = Mode::parse(&value),
                 "appearance" => settings.appearance = Appearance::parse(&value).unwrap_or(settings.appearance),
+                "input_boost" => settings.input_boost = value.parse().map(snap_input_boost).unwrap_or(settings.input_boost),
                 _ => {}
             }
         }
@@ -464,6 +476,7 @@ impl Store {
             ("female_voice", settings.female_voice.clone()),
             ("mode", settings.mode.as_str().to_string()),
             ("appearance", settings.appearance.as_str().to_string()),
+            ("input_boost", settings.input_boost.to_string()),
         ];
         for (key, value) in pairs {
             self.exec(
@@ -730,11 +743,20 @@ mod tests {
         settings.new_per_day = 4;
         settings.mode = Mode::Listen;
         settings.appearance = Appearance::Dark;
+        settings.input_boost = 1.5;
         store.save_settings(&settings).unwrap();
         store.save_settings(&settings).unwrap();
         drop(store);
         let reopened = Store::open(&Paths::at(dir.path())).unwrap();
         assert_eq!(reopened.settings().unwrap(), settings);
+    }
+
+    #[test]
+    fn input_boost_snaps_to_the_offered_steps() {
+        assert_eq!(snap_input_boost(0.1), 0.5);
+        assert_eq!(snap_input_boost(1.4), 1.5);
+        assert_eq!(snap_input_boost(2.2), 2.0);
+        assert_eq!(snap_input_boost(9.0), 2.5);
     }
 
     #[test]

@@ -6,9 +6,10 @@ use chrono::Utc;
 use dutch_flashcards_core::paths::Paths;
 use dutch_flashcards_core::schedule::Scheduler;
 use dutch_flashcards_core::speech::Listener;
-use dutch_flashcards_core::store::{Appearance, Settings};
+use dutch_flashcards_core::store::{Appearance, INPUT_BOOSTS, Settings};
 use dutch_flashcards_core::voice::{self, Speaker, Speed, VoiceOption};
 use dutch_flashcards_core::Store;
+use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::theme::{Theme, ThemeMode};
@@ -65,6 +66,9 @@ pub struct FlashcardsApp {
     pub mic_test: crate::mic_test::MicTest,
     /// Instellingen scrolls; the microphone test brings its result into view.
     pub settings_scroll: ScrollHandle,
+    /// The input boost slider in Instellingen.
+    pub boost_slider: Entity<SliderState>,
+    _boost_changed: Subscription,
     pub add: AddState,
     pub drafts: Vec<DraftRow>,
     pub deck: DeckState,
@@ -86,6 +90,10 @@ impl FlashcardsApp {
                 Theme::sync_system_appearance(Some(window), cx);
             }
         });
+        let boost_slider = cx.new(|_| {
+            SliderState::new().min(INPUT_BOOSTS[0]).max(INPUT_BOOSTS[INPUT_BOOSTS.len() - 1]).step(0.5).default_value(settings.input_boost)
+        });
+        let boost_changed = cx.subscribe(&boost_slider, |this, _, event: &SliderEvent, cx| this.boost_slider_moved(event, cx));
         let mut app = FlashcardsApp {
             _appearance_changed: appearance_changed,
             scheduler: Scheduler::default(),
@@ -95,6 +103,8 @@ impl FlashcardsApp {
             study: StudyState::new(settings.mode, cx),
             mic_test: Default::default(),
             settings_scroll: ScrollHandle::new(),
+            boost_slider,
+            _boost_changed: boost_changed,
             add: AddState::new(window, cx),
             deck: DeckState::new(window, cx),
             deck_query: String::new(),

@@ -74,7 +74,9 @@ day (10 by default, set in Instellingen).
   laptop, its volume and whether it is muted) and lists the others. The test
   records a few words, says whether they came in too quiet, too loud or fine,
   plays back exactly what the computer heard and shows what Whisper made of it.
-  The app always records from the system's default microphone.
+  The app always records from the system's default microphone. **Versterking**
+  (0,5×–2,5×, a slider) amplifies every recording, in study and in the test,
+  before the app listens to it; samples pushed past full scale are cut off.
 
 ## Running it
 

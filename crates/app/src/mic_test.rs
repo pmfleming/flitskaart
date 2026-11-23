@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use dutch_flashcards_core::inputs::{Input, Inputs};
 use dutch_flashcards_core::speech::write_wav_16k;
+use dutch_flashcards_core::store::{INPUT_BOOSTS, snap_input_boost};
 use gpui_kit::component::button::Button;
+use gpui_kit::component::slider::{Slider, SliderEvent};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, h_flex, v_flex};
 use gpui_kit::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -77,14 +79,14 @@ impl FlashcardsApp {
         self.mic_test.result = None;
         self.mic_test.error = None;
         if let Some(path) = self.fake_recording.clone() {
-            match recorder::from_file(&path) {
+            match recorder::from_file(&path, self.settings.input_boost) {
                 Ok(captured) => self.finish_mic_test(captured, cx),
                 Err(err) => self.mic_test.error = Some(format!("{err:#}").into()),
             }
             cx.notify();
             return;
         }
-        self.mic_test.recording = Some(Recording::start());
+        self.mic_test.recording = Some(Recording::start(self.settings.input_boost));
         cx.notify();
         cx.spawn(async move |this, cx| {
             loop {
@@ -164,6 +166,19 @@ impl FlashcardsApp {
         self.settings_scroll.scroll_to_item(crate::settings::MICROPHONE_SECTION);
     }
 
+    /// Follows the input boost slider while it moves and saves where it is let go.
+    pub fn boost_slider_moved(&mut self, event: &SliderEvent, cx: &mut Context<Self>) {
+        let (value, release) = match event {
+            SliderEvent::Change(value) => (value.start(), false),
+            SliderEvent::Release(value) => (value.start(), true),
+        };
+        self.settings.input_boost = snap_input_boost(value);
+        if release {
+            self.save_settings();
+        }
+        cx.notify();
+    }
+
     /// Plays the saved test: the same 16 kHz sound Whisper listens to.
     fn play_mic_test(&mut self, cx: &mut Context<Self>) {
         if self.mic_test.recording.is_some() {
@@ -218,6 +233,7 @@ impl FlashcardsApp {
             .max_w(px(640.))
             .child(heading("Microfoon"))
             .child(self.render_inputs(cx))
+            .child(self.render_boost(cx))
             .child(hint(
                 format!(
                     "Neem een paar woorden op en luister terug wat de computer hoorde. Zeg bijvoorbeeld: “{TEST_SENTENCE}”"
@@ -227,6 +243,25 @@ impl FlashcardsApp {
             .child(h_flex().gap_2().flex_wrap().child(test_button).child(play_button))
             .children(status)
             .children(test.error.clone().map(|text| hint(text, cx).text_color(theme.danger)))
+    }
+
+    /// The input boost: a slider over the offered steps, with the steps marked below it.
+    fn render_boost(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let slider = v_flex()
+            .gap_1p5()
+            .max_w(px(360.))
+            .child(
+                h_flex()
+                    .justify_between()
+                    .child(div().font_weight(FontWeight::MEDIUM).child("Versterking"))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(boost_label(self.settings.input_boost))),
+            )
+            .child(Slider::new(&self.boost_slider).disabled(self.mic_test.recording.is_some()))
+            .child(h_flex().justify_between().children(INPUT_BOOSTS.map(|boost| hint(boost_label(boost), cx))));
+        v_flex()
+            .gap_1p5()
+            .child(slider)
+            .child(hint("Maakt de opname harder of zachter voordat de app luistert. Bij 1× blijft hij zoals hij is.", cx))
     }
 
     /// Which microphone the sound comes from, and which others there are.
@@ -290,8 +325,8 @@ impl FlashcardsApp {
         let theme = cx.theme().clone();
         let (color, verdict) = match result.loudness {
             Loudness::Good => (theme.success, "Je microfoon werkt."),
-            Loudness::Quiet => (theme.warning, "Je klinkt zacht. Spreek dichter bij de microfoon of zet het invoervolume hoger."),
-            Loudness::Clipped => (theme.warning, "Je klinkt te hard en vervormd. Zet het invoervolume lager."),
+            Loudness::Quiet => (theme.warning, "Je klinkt zacht. Zet de versterking hoger of spreek dichter bij de microfoon."),
+            Loudness::Clipped => (theme.warning, "Je klinkt te hard en vervormd. Zet de versterking lager."),
             Loudness::Silent => (
                 theme.danger,
                 "Ik hoorde niets. Kijk hierboven of het de juiste microfoon is en of hij niet gedempt is.",
@@ -320,4 +355,9 @@ impl FlashcardsApp {
             .children(heard.map(|text| hint(text, cx)))
             .into_any_element()
     }
+}
+
+/// An input boost as people read it here: `0,5×`, `1×`, `2,5×`.
+fn boost_label(boost: f32) -> String {
+    if boost.fract() == 0.0 { format!("{boost:.0}×") } else { format!("{boost:.1}×").replace('.', ",") }
 }
