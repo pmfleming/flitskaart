@@ -11,6 +11,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use crate::app::FlashcardsApp;
 use crate::ui::{heading, hint};
 
+/// The microphone test is the third section of Instellingen.
+pub const MICROPHONE_SECTION: usize = 2;
+
 impl FlashcardsApp {
     fn set_gender(&mut self, gender: Gender, cx: &mut Context<Self>) {
         self.settings.gender = gender;
@@ -110,6 +113,7 @@ impl FlashcardsApp {
             .id("settings")
             .size_full()
             .overflow_y_scroll()
+            .track_scroll(&self.settings_scroll)
             .p_5()
             .gap_6()
             .child(

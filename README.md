@@ -69,9 +69,12 @@ day (10 by default, set in Instellingen).
 - **Kaarten** – search, edit, pause, reset or delete cards; see misses and
   how often you looked at the English.
 - **Instellingen** – male or female voice, a microphone test, light/dark/system
-  colours, new cards per day. The microphone test records a few words, says
-  whether they came in too quiet, too loud or fine, plays them back and shows
-  what Whisper heard.
+  colours, new cards per day. The Microfoon section names the microphone the
+  sound comes from (read from PipeWire with `pw-dump`: Bluetooth, USB or the
+  laptop, its volume and whether it is muted) and lists the others. The test
+  records a few words, says whether they came in too quiet, too loud or fine,
+  plays back exactly what the computer heard and shows what Whisper made of it.
+  The app always records from the system's default microphone.
 
 ## Running it
 

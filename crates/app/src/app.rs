@@ -63,6 +63,8 @@ pub struct FlashcardsApp {
     pub screen: Screen,
     pub study: StudyState,
     pub mic_test: crate::mic_test::MicTest,
+    /// Instellingen scrolls; the microphone test brings its result into view.
+    pub settings_scroll: ScrollHandle,
     pub add: AddState,
     pub drafts: Vec<DraftRow>,
     pub deck: DeckState,
@@ -92,6 +94,7 @@ impl FlashcardsApp {
             fake_recording: None,
             study: StudyState::new(settings.mode, cx),
             mic_test: Default::default(),
+            settings_scroll: ScrollHandle::new(),
             add: AddState::new(window, cx),
             deck: DeckState::new(window, cx),
             deck_query: String::new(),
@@ -125,6 +128,7 @@ impl FlashcardsApp {
                 self.study.focus.focus(window, cx);
             }
             Screen::Deck => self.reload_deck(),
+            Screen::Settings => self.refresh_inputs(cx),
             Screen::Add => self.add.snippet.focus_handle(cx).focus(window, cx),
             _ => {}
         }

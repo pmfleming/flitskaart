@@ -2,6 +2,7 @@
 //! storage, the Dutch voice and turning conversation snippets into cards.
 
 pub mod drafting;
+pub mod inputs;
 pub mod model;
 pub mod paths;
 pub mod schedule;
