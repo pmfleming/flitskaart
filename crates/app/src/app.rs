@@ -62,6 +62,7 @@ pub struct FlashcardsApp {
     pub audio: Audio,
     pub screen: Screen,
     pub study: StudyState,
+    pub mic_test: crate::mic_test::MicTest,
     pub add: AddState,
     pub drafts: Vec<DraftRow>,
     pub deck: DeckState,
@@ -90,6 +91,7 @@ impl FlashcardsApp {
             listener: Listener::new(&paths),
             fake_recording: None,
             study: StudyState::new(settings.mode, cx),
+            mic_test: Default::default(),
             add: AddState::new(window, cx),
             deck: DeckState::new(window, cx),
             deck_query: String::new(),
@@ -284,7 +286,8 @@ impl FlashcardsApp {
         self.replay_keys(keys.to_vec(), window, cx);
     }
 
-    /// Replays study keys; `wacht` waits until recording and listening are done.
+    /// Replays study keys (on Instellingen, `microfoon` runs the microphone test);
+    /// `wacht` waits until recording and listening are done.
     fn replay_keys(&mut self, mut keys: Vec<String>, window: &mut Window, cx: &mut Context<Self>) {
         while !keys.is_empty() {
             let key = keys.remove(0);
@@ -292,7 +295,7 @@ impl FlashcardsApp {
                 cx.spawn_in(window, async move |this, cx| {
                     loop {
                         cx.background_executor().timer(Duration::from_millis(100)).await;
-                        let busy = this.update(cx, |this, _| this.busy_listening()).unwrap_or(false);
+                        let busy = this.update(cx, |this, _| this.busy_listening() || this.mic_test.is_busy()).unwrap_or(false);
                         if !busy {
                             break;
                         }
@@ -304,6 +307,8 @@ impl FlashcardsApp {
             }
             if self.screen == Screen::Study {
                 self.study_key(&key, window, cx);
+            } else if self.screen == Screen::Settings && key == "microfoon" {
+                self.start_mic_test(cx);
             }
         }
     }

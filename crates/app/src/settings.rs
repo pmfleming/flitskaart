@@ -1,4 +1,5 @@
-//! Instellingen: the voice and the daily limit for new cards.
+//! Instellingen: the voice, the microphone test, the colours and the daily
+//! limit for new cards.
 
 use dutch_flashcards_core::store::Appearance;
 use dutch_flashcards_core::voice::{self, Gender, SAMPLE, Speed, VoiceOption};
@@ -138,6 +139,7 @@ impl FlashcardsApp {
                         hint("Spraakherkenning ontbreekt. Installeer die met scripts/fetch-models.sh.", cx).text_color(theme.danger)
                     }),
             )
+            .child(self.render_mic_test(cx))
             .child(
                 v_flex()
                     .gap_3()

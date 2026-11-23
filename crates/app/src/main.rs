@@ -6,6 +6,7 @@ mod audio;
 mod deck;
 mod drafts;
 mod icons;
+mod mic_test;
 mod recorder;
 mod settings;
 mod speaking;

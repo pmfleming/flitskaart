@@ -68,7 +68,10 @@ day (10 by default, set in Instellingen).
 - **Concepten** – edit, listen to, keep or discard each draft. Duplicates are flagged.
 - **Kaarten** – search, edit, pause, reset or delete cards; see misses and
   how often you looked at the English.
-- **Instellingen** – male or female voice, light/dark/system colours, new cards per day.
+- **Instellingen** – male or female voice, a microphone test, light/dark/system
+  colours, new cards per day. The microphone test records a few words, says
+  whether they came in too quiet, too loud or fine, plays them back and shows
+  what Whisper heard.
 
 ## Running it
 
@@ -114,7 +117,8 @@ words right, while the female voices built from audiobook recordings (MLS) got
 - `scripts/capture.sh` – runs the app in a headless Weston session and saves a
   screenshot. With `--screen <name>`, `--keys "space v"` and
   `--appearance donker` it can show any screen and study state; `--recording file.wav`
-  stands in for the microphone, and `wacht` in `--keys` waits for Whisper.
+  stands in for the microphone, and `wacht` in `--keys` waits for Whisper. On
+  `--screen instellingen`, `--keys microfoon` runs the microphone test.
 - `scripts/fetch-models.sh` – downloads the voices and the speech recognizer.
 - `crates/core/examples/` – `draft` (try the drafting prompt on a snippet) and
   `import` (add `Nederlands | English` lines from stdin).
