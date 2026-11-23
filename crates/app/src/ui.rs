@@ -1,6 +1,6 @@
 //! Small shared pieces of the interface.
 
-use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::*;
 
 /// A key hint such as `Spatie` or `V`.
@@ -22,6 +22,23 @@ pub fn keycap(label: &str, cx: &App) -> Div {
 /// Muted helper text.
 pub fn hint(text: impl Into<SharedString>, cx: &App) -> Div {
     div().text_sm().text_color(cx.theme().muted_foreground).child(text.into())
+}
+
+/// A red recording dot and a bar showing the input loudness (0.0–1.0).
+pub fn level_meter(level: f32, cx: &App) -> Div {
+    let theme = cx.theme();
+    h_flex()
+        .gap_3()
+        .items_center()
+        .child(div().size(px(10.)).rounded_full().bg(theme.danger))
+        .child(
+            div()
+                .w(px(160.))
+                .h(px(6.))
+                .rounded_full()
+                .bg(theme.secondary)
+                .child(div().h_full().rounded_full().bg(theme.danger).w(px(160. * level.clamp(0.0, 1.0)))),
+        )
 }
 
 /// A heading for a screen.

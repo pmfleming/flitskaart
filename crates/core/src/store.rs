@@ -6,8 +6,8 @@ use turso::{Connection, Value};
 
 use crate::model::{Card, CardId, Grade, NewCard, Status, normalize};
 use crate::paths::Paths;
-use crate::schedule::{Scheduler, new_schedule};
-use crate::speech::{Assessment, combine};
+use crate::schedule::{Scheduler, count, new_schedule};
+use crate::speech::Assessment;
 use crate::voice::{Gender, VOICES};
 
 const SCHEMA: &str = "
@@ -61,6 +61,8 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("reviews", "heard", "TEXT"),
     // The latest understandability, for the deck list.
     ("cards", "speech_accuracy", "REAL"),
+    // How much of the stability gain the review earned (see schedule::count).
+    ("reviews", "share", "REAL"),
 ];
 
 const CARD_COLUMNS: &str =
@@ -69,25 +71,25 @@ const CARD_COLUMNS: &str =
 /// How a review was done, kept with each review for later analysis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    Speak,
-    Silent,
+    /// The card's text is shown; the learner may test their reading aloud.
+    Read,
+    /// The card is heard first with its text hidden.
     Listen,
 }
 
 impl Mode {
     pub fn as_str(self) -> &'static str {
         match self {
-            Mode::Speak => "speak",
-            Mode::Silent => "silent",
+            Mode::Read => "read",
             Mode::Listen => "listen",
         }
     }
 
+    /// Reads a saved mode. The earlier "speak" and "silent" modes are both reading now.
     pub fn parse(value: &str) -> Mode {
         match value {
-            "silent" => Mode::Silent,
             "listen" => Mode::Listen,
-            _ => Mode::Speak,
+            _ => Mode::Read,
         }
     }
 }
@@ -142,7 +144,7 @@ impl Default for Settings {
             gender: Gender::Male,
             male_voice: VOICES.iter().find(|v| v.gender == Gender::Male).unwrap().id.into(),
             female_voice: VOICES.iter().find(|v| v.gender == Gender::Female).unwrap().id.into(),
-            mode: Mode::Speak,
+            mode: Mode::Read,
             appearance: Appearance::System,
         }
     }
@@ -366,8 +368,8 @@ impl Store {
     /// Saves a review and reschedules the card.
     ///
     /// `own` is how well the learner says they knew the card. When they read it
-    /// aloud, `speech` says how understandable they were, and the lower of the
-    /// two grades schedules the card.
+    /// aloud, `speech` says how understandable they were; `peeked` says they
+    /// opened the meaning. [`count`] turns these into how the review counts.
     #[allow(clippy::too_many_arguments)]
     pub fn record_review(
         &self,
@@ -380,8 +382,9 @@ impl Store {
         now: DateTime<Utc>,
     ) -> Result<Card> {
         let card = self.card(id)?.ok_or_else(|| anyhow!("card {id} no longer exists"))?;
-        let grade = combine(own, speech.map(|s| s.grade));
-        let schedule = scheduler.apply(&card.schedule, now, grade);
+        let counted = count(own, speech.map(|s| s.grade), peeked, mode);
+        let grade = counted.grade;
+        let schedule = scheduler.apply(&card.schedule, now, counted);
         let accuracy = speech.map_or(Value::Null, |s| Value::Real(f64::from(s.accuracy)));
         self.exec(
             "UPDATE cards SET schedule = ?2, due = ?3, reviews = reviews + 1,
@@ -399,8 +402,8 @@ impl Store {
             ],
         )?;
         self.exec(
-            "INSERT INTO reviews (card_id, grade, own_grade, speech_grade, speech_accuracy, heard, mode, peeked, reviewed_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO reviews (card_id, grade, own_grade, speech_grade, speech_accuracy, heard, mode, peeked, reviewed_at, share)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             vec![
                 Value::Integer(id),
                 Value::Integer(i64::from(grade.number())),
@@ -411,6 +414,7 @@ impl Store {
                 mode.as_str().into(),
                 Value::Integer(i64::from(peeked)),
                 stamp(now).into(),
+                Value::Real(counted.share),
             ],
         )?;
         self.card(id)?.ok_or_else(|| anyhow!("card {id} disappeared"))
@@ -599,13 +603,13 @@ mod tests {
         let id = store.add_drafts(None, &[new_card("Ik heb er zin in.")], now).unwrap()[0];
         store.accept(id, now).unwrap();
         let scheduler = Scheduler::default();
-        let card = store.record_review(id, Grade::DontKnow, None, Mode::Speak, true, &scheduler, now).unwrap();
+        let card = store.record_review(id, Grade::DontKnow, None, Mode::Read, true, &scheduler, now).unwrap();
         assert_eq!((card.reviews, card.misses, card.peeks), (1, 1, 1));
         assert!(card.due.unwrap() > now);
         // Comes back later in the session, not now.
         assert_eq!(store.counts(now, 10).unwrap().due, 0);
         assert_eq!(store.next_card(now, 10).unwrap().map(|c| c.id), Some(id), "learn-ahead within 20 minutes");
-        let card = store.record_review(id, Grade::Easy, None, Mode::Silent, false, &scheduler, card.due.unwrap()).unwrap();
+        let card = store.record_review(id, Grade::Easy, None, Mode::Read, false, &scheduler, card.due.unwrap()).unwrap();
         assert!(card.due.unwrap() - now > Duration::hours(12));
         assert!(store.next_card(now + Duration::hours(1), 10).unwrap().is_none());
     }
@@ -620,8 +624,8 @@ mod tests {
             store.accept(*id, now).unwrap();
         }
         assert_eq!(store.counts(now, 2).unwrap().new, 2);
-        store.record_review(ids[0], Grade::Easy, None, Mode::Speak, false, &scheduler, now).unwrap();
-        store.record_review(ids[1], Grade::Easy, None, Mode::Speak, false, &scheduler, now).unwrap();
+        store.record_review(ids[0], Grade::Easy, None, Mode::Read, false, &scheduler, now).unwrap();
+        store.record_review(ids[1], Grade::Easy, None, Mode::Read, false, &scheduler, now).unwrap();
         assert_eq!(store.counts(now, 2).unwrap().new, 0);
         assert!(store.next_card(now, 2).unwrap().is_none());
     }
@@ -648,7 +652,7 @@ mod tests {
         let scheduler = Scheduler::default();
         let id = store.add_drafts(None, &[new_card("Het huis is groot.")], now).unwrap()[0];
         store.accept(id, now).unwrap();
-        store.record_review(id, Grade::Hard, None, Mode::Speak, false, &scheduler, now).unwrap();
+        store.record_review(id, Grade::Hard, None, Mode::Read, false, &scheduler, now).unwrap();
         store.set_suspended(id, true).unwrap();
         assert!(store.next_card(now + Duration::days(30), 10).unwrap().is_none());
         store.set_suspended(id, false).unwrap();
@@ -671,8 +675,8 @@ mod tests {
         }
         let clear = crate::speech::assess("Ik heb kaas gekocht.", "Ik heb kaas gekocht.");
         let unclear = crate::speech::assess("Ik heb brood gekocht.", "Ik heb gekocht.");
-        let a = store.record_review(ids[0], Grade::Easy, Some(&clear), Mode::Speak, false, &scheduler, now).unwrap();
-        let b = store.record_review(ids[1], Grade::Easy, Some(&unclear), Mode::Speak, false, &scheduler, now).unwrap();
+        let a = store.record_review(ids[0], Grade::Easy, Some(&clear), Mode::Read, false, &scheduler, now).unwrap();
+        let b = store.record_review(ids[1], Grade::Easy, Some(&unclear), Mode::Read, false, &scheduler, now).unwrap();
         assert!(b.due.unwrap() < a.due.unwrap());
         assert_eq!(a.speech_accuracy, Some(1.0));
         assert!(b.speech_accuracy.unwrap() < 0.85);
@@ -731,5 +735,52 @@ mod tests {
         drop(store);
         let reopened = Store::open(&Paths::at(dir.path())).unwrap();
         assert_eq!(reopened.settings().unwrap(), settings);
+    }
+
+    #[test]
+    fn the_old_speaking_and_silent_modes_load_as_reading() {
+        for old in ["speak", "silent"] {
+            let (_dir, store) = store();
+            store.exec("INSERT INTO settings (key, value) VALUES ('mode', ?1)", vec![old.into()]).unwrap();
+            assert_eq!(store.settings().unwrap().mode, Mode::Read, "{old}");
+        }
+    }
+
+    #[test]
+    fn each_review_saves_how_much_it_counted() {
+        let (_dir, store) = store();
+        let now = Utc::now();
+        let scheduler = Scheduler::default();
+        let id = store.add_drafts(None, &[new_card("Ik woon in Utrecht.")], now).unwrap()[0];
+        store.accept(id, now).unwrap();
+        let spoken = crate::speech::assess("Ik woon in Utrecht.", "Ik woon in Utrecht.");
+        let card = store.record_review(id, Grade::Comfortable, Some(&spoken), Mode::Read, false, &scheduler, now).unwrap();
+        let card = store.record_review(id, Grade::Comfortable, None, Mode::Read, false, &scheduler, card.due.unwrap()).unwrap();
+        store.record_review(id, Grade::Easy, None, Mode::Read, true, &scheduler, card.due.unwrap()).unwrap();
+        let saved = store.rows("SELECT share, grade, own_grade FROM reviews ORDER BY id", vec![]).unwrap();
+        let shares: Vec<_> = saved.iter().map(|row| row[0].clone()).collect();
+        assert_eq!(shares, [Value::Real(1.0), Value::Real(crate::schedule::SCORE_ONLY_SHARE), Value::Real(0.0)]);
+        // Opening the meaning: pressed Makkelijk, counted as Moeilijk.
+        assert_eq!((integer(&saved[2][1]), integer(&saved[2][2])), (2, 4));
+    }
+
+    #[test]
+    fn opening_the_meaning_does_not_lengthen_the_pause() {
+        let (_dir, store) = store();
+        let mut now = Utc::now();
+        let scheduler = Scheduler::default();
+        let id = store.add_drafts(None, &[new_card("De trein is te laat.")], now).unwrap()[0];
+        store.accept(id, now).unwrap();
+        let mut card = store.card(id).unwrap().unwrap();
+        for _ in 0..3 {
+            card = store.record_review(id, Grade::Comfortable, None, Mode::Listen, false, &scheduler, now).unwrap();
+            now = card.due.unwrap();
+        }
+        let last = card.schedule.scheduled_days;
+        assert!(last >= 7, "practised card should be days apart, got {last}");
+        let card = store.record_review(id, Grade::Easy, None, Mode::Read, true, &scheduler, now).unwrap();
+        // Fuzz may move it a little either way, but never stretch it.
+        let pause = (card.due.unwrap() - now).num_days();
+        assert!(pause <= last + last / 5 + 1, "{pause} days after a {last}-day pause");
     }
 }

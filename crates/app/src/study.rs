@@ -1,46 +1,32 @@
-//! Oefenen: show, read, score, hear.
+//! Oefenen: one panel per card. Read the Dutch, test your reading, hear the
+//! sentence, look up the meaning, and score how easily it came back.
 
-use dutch_flashcards_core::schedule::describe;
-use dutch_flashcards_core::speech::{Assessment, combine};
+use dutch_flashcards_core::speech::{Assessment, missed_ranges};
 use dutch_flashcards_core::store::{Counts, Mode};
 use dutch_flashcards_core::voice::Speed;
 use dutch_flashcards_core::{Card, Grade, Status};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex, Disableable as _, Selectable as _, Sizable as _};
-use gpui_kit::*;
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::app::{FlashcardsApp, Screen};
+use crate::icons;
 use crate::recorder::Recording;
 use crate::ui::{empty_state, hint, keycap};
-
-/// Where the learner is within one card.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Step {
-    /// The Dutch is shown; the learner reads it (aloud or silently).
-    Read,
-    /// Listening mode: the audio plays with the text hidden.
-    Listen,
-    /// The learner scores themselves.
-    Score,
-    /// Speaking mode: after scoring, the learner asks to hear the card.
-    Hear,
-}
 
 pub struct StudyState {
     pub focus: FocusHandle,
     pub mode: Mode,
     pub card: Option<Card>,
-    pub step: Step,
-    pub grade: Option<Grade>,
-    pub heard: bool,
+    /// Luisteren: the text stays hidden until the learner asks for it.
+    pub revealed: bool,
     pub english_shown: bool,
+    /// The meaning was opened during this review, even if hidden again.
     pub peeked: bool,
-    /// How far away the card would be scheduled for each grade.
-    pub previews: [chrono::Duration; 4],
     pub counts: Counts,
     pub reviewed_today: usize,
-    // Reading aloud (Spreken mode).
+    // Testing the reading aloud (Lezen).
     pub recording: Option<Recording>,
     pub level: f32,
     pub judging: bool,
@@ -55,12 +41,9 @@ impl StudyState {
             focus: cx.focus_handle(),
             mode,
             card: None,
-            step: Step::Read,
-            grade: None,
-            heard: false,
+            revealed: false,
             english_shown: false,
             peeked: false,
-            previews: Default::default(),
             counts: Counts::default(),
             reviewed_today: 0,
             recording: None,
@@ -72,27 +55,9 @@ impl StudyState {
         }
     }
 
-    fn first_step(&self) -> Step {
-        if self.mode == Mode::Listen { Step::Listen } else { Step::Read }
-    }
-
-    /// Steps shown in the strip above the card, for the current mode.
-    fn steps(&self) -> &'static [(Step, &'static str)] {
-        match self.mode {
-            Mode::Speak => &[(Step::Read, "Lezen"), (Step::Score, "Beoordelen"), (Step::Hear, "Luisteren")],
-            Mode::Silent => &[(Step::Read, "Lezen"), (Step::Score, "Beoordelen")],
-            Mode::Listen => &[(Step::Listen, "Luisteren"), (Step::Score, "Beoordelen")],
-        }
-    }
-
-    /// Sound is only offered after scoring in speaking mode, never in silent mode.
-    pub fn audio_allowed(&self) -> bool {
-        self.card.is_some()
-            && match self.mode {
-                Mode::Speak => self.step == Step::Hear,
-                Mode::Silent => false,
-                Mode::Listen => true,
-            }
+    /// Scores are open from the start in Lezen, and once the text is shown in Luisteren.
+    fn scoring_open(&self) -> bool {
+        self.card.is_some() && (self.mode == Mode::Read || self.revealed)
     }
 }
 
@@ -111,9 +76,7 @@ impl FlashcardsApp {
     fn start_card(&mut self, card: Option<Card>, cx: &mut Context<Self>) {
         self.stop_audio();
         let study = &mut self.study;
-        study.step = study.first_step();
-        study.grade = None;
-        study.heard = false;
+        study.revealed = false;
         study.english_shown = false;
         study.peeked = false;
         study.recording = None;
@@ -122,17 +85,12 @@ impl FlashcardsApp {
         study.speech = None;
         study.speech_note = None;
         study.has_recording = false;
-        study.previews = match &card {
-            Some(card) => self.scheduler.preview(&card.schedule, Self::now()),
-            None => Default::default(),
-        };
         study.card = card;
         if let Some(card) = &self.study.card {
             let text = card.dutch.clone();
             match self.study.mode {
                 Mode::Listen => self.speak(text, self.current_voice(), Speed::Normal, cx),
-                Mode::Speak => self.prepare_audio(text, cx),
-                Mode::Silent => {}
+                Mode::Read => self.prepare_audio(text, cx),
             }
         }
         cx.notify();
@@ -149,48 +107,27 @@ impl FlashcardsApp {
         self.start_card(card, cx);
     }
 
-    /// Space: the main action of the current step.
+    /// Space: test the reading (or stop the recording) in Lezen; show the text in Luisteren.
     fn advance(&mut self, cx: &mut Context<Self>) {
         if self.study.card.is_none() {
             return;
         }
-        if self.study.recording.is_some() {
-            self.stop_recording();
-            return;
-        }
-        if self.study.judging {
-            return;
-        }
-        match self.study.step {
-            Step::Read if self.can_record() => self.start_recording(cx),
-            Step::Read | Step::Listen => self.study.step = Step::Score,
-            Step::Score => {}
-            Step::Hear if !self.study.heard => self.hear(Speed::Normal, cx),
-            Step::Hear => self.commit(cx),
+        match self.study.mode {
+            Mode::Read if self.study.recording.is_some() => self.stop_recording(),
+            Mode::Read => self.start_recording(cx),
+            Mode::Listen => self.study.revealed = true,
         }
         cx.notify();
     }
 
-    fn grade(&mut self, grade: Grade, cx: &mut Context<Self>) {
-        if self.study.card.is_none() || self.busy_listening() || !matches!(self.study.step, Step::Score | Step::Hear) {
-            return;
-        }
-        self.study.grade = Some(grade);
-        if self.study.mode == Mode::Speak {
-            self.study.step = Step::Hear;
-            cx.notify();
-        } else {
-            self.commit(cx);
-        }
-    }
-
+    /// Plays the sentence in the Dutch voice chosen in the settings.
     fn hear(&mut self, speed: Speed, cx: &mut Context<Self>) {
-        if !self.study.audio_allowed() {
+        // The microphone would pick the voice up.
+        if self.busy_listening() {
             return;
         }
         let Some(card) = &self.study.card else { return };
         let text = card.dutch.clone();
-        self.study.heard = true;
         self.speak(text, self.current_voice(), speed, cx);
     }
 
@@ -205,12 +142,12 @@ impl FlashcardsApp {
         cx.notify();
     }
 
-    /// Saves the score and moves to the next card.
-    pub(crate) fn commit(&mut self, cx: &mut Context<Self>) {
-        if self.busy_listening() {
+    /// Saves the learner's score and moves straight to the next card.
+    fn score(&mut self, grade: Grade, cx: &mut Context<Self>) {
+        if !self.study.scoring_open() || self.busy_listening() {
             return;
         }
-        let (Some(card), Some(grade)) = (self.study.card.as_ref(), self.study.grade) else { return };
+        let Some(card) = &self.study.card else { return };
         let result = self.store.record_review(
             card.id,
             grade,
@@ -249,17 +186,12 @@ impl FlashcardsApp {
     pub fn study_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
         match key {
             "space" => self.advance(cx),
-            "enter" if self.study.step == Step::Hear => self.commit(cx),
-            "enter" if self.study.step == Step::Read && self.study.recording.is_none() && !self.study.judging => {
-                self.study.step = Step::Score;
-                cx.notify();
-            }
             "escape" if self.study.recording.is_some() => self.cancel_recording(cx),
-            "r" => self.record_again(cx),
+            "r" => self.start_recording(cx),
             "o" => self.play_own_recording(cx),
             "1" | "2" | "3" | "4" => {
                 if let Some(grade) = key.parse().ok().and_then(Grade::from_number) {
-                    self.grade(grade, cx);
+                    self.score(grade, cx);
                 }
             }
             "v" => self.toggle_english(cx),
@@ -271,10 +203,10 @@ impl FlashcardsApp {
         true
     }
 
-    pub fn render_study(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn render_study(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus = self.study.focus.clone();
         let content = if self.study.card.is_some() {
-            self.render_card(window, cx).into_any_element()
+            self.render_card(cx).into_any_element()
         } else {
             self.render_study_empty(cx).into_any_element()
         };
@@ -292,9 +224,10 @@ impl FlashcardsApp {
     }
 
     fn render_study_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let modes = [(Mode::Speak, "Spreken"), (Mode::Silent, "Stil"), (Mode::Listen, "Luisteren")];
+        let modes = [(Mode::Read, "Lezen"), (Mode::Listen, "Luisteren")];
         let counts = self.study.counts;
-        let summary = if self.study.card.is_some() || counts.due + counts.new > 0 {
+        let has_card = self.study.card.is_some();
+        let summary = if has_card || counts.due + counts.new > 0 {
             format!("{} te herhalen · {} nieuw", counts.due, counts.new)
         } else {
             String::new()
@@ -315,28 +248,37 @@ impl FlashcardsApp {
                         this.study.focus.focus(window, cx);
                     }))
             })))
-            .child(hint(summary, cx))
+            .child(
+                h_flex().gap_3().child(hint(summary, cx)).when(has_card, |d| {
+                    d.child(
+                        Button::new("edit")
+                            .ghost()
+                            .small()
+                            .tab_stop(false)
+                            .child(h_flex().gap_1p5().child("Bewerken").child(keycap("B", cx)))
+                            .on_click(cx.listener(|this, _, window, cx| this.edit_current(window, cx))),
+                    )
+                }),
+            )
     }
 
-    fn render_card(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_card(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
         let study = &self.study;
         let card = study.card.as_ref().unwrap();
-        let theme = cx.theme().clone();
-        let veiled = study.step == Step::Listen;
-        let show_note = !card.note.is_empty() && matches!(study.step, Step::Score | Step::Hear);
+        let veiled = study.mode == Mode::Listen && !study.revealed;
 
-        let steps = h_flex().gap_5().justify_center().children(study.steps().iter().enumerate().map(|(i, (step, label))| {
-            let current = *step == study.step;
-            div()
-                .pb_0p5()
-                .border_b_2()
-                .border_color(if current { theme.primary } else { transparent_black() })
-                .text_sm()
-                .text_color(if current { theme.foreground } else { theme.muted_foreground })
-                .when(current, |d| d.font_weight(FontWeight::MEDIUM))
-                .child(format!("{}  {label}", i + 1))
-        }));
-
+        // Words the app missed are marked in the sentence itself.
+        let missed = HighlightStyle {
+            color: Some(theme.danger),
+            underline: Some(UnderlineStyle { thickness: px(2.), color: Some(theme.danger), wavy: false }),
+            ..Default::default()
+        };
+        let highlights = match &study.speech {
+            Some(result) if !veiled => missed_ranges(&card.dutch, &result.words).into_iter().map(|range| (range, missed)).collect(),
+            _ => Vec::new(),
+        };
+        let text: SharedString = if veiled { "• • •".into() } else { card.dutch.clone().into() };
         let phrase = div()
             .max_w(px(720.))
             .text_center()
@@ -344,7 +286,7 @@ impl FlashcardsApp {
             .line_height(relative(1.25))
             .font_weight(FontWeight::MEDIUM)
             .when(veiled, |d| d.text_color(theme.muted_foreground))
-            .child(if veiled { "• • •".to_string() } else { card.dutch.clone() });
+            .child(StyledText::new(text).with_highlights(highlights));
 
         let sound = if self.preparing_audio {
             "stem wordt gemaakt…"
@@ -354,149 +296,132 @@ impl FlashcardsApp {
             ""
         };
 
-        let recording_controls = (study.step == Step::Read && self.can_record()).then(|| self.render_recording_controls(cx));
-        let (prompt, primary) = match study.step {
-            Step::Read if recording_controls.is_some() => ("", None),
-            Step::Read if study.mode == Mode::Speak => ("Lees de kaart hardop.", Some("Gelezen")),
-            Step::Read => ("Lees de kaart in stilte.", Some("Gelezen")),
-            Step::Listen => ("Luister. Wat hoor je?", Some("Toon tekst")),
-            Step::Score => ("Hoe ging het?", None),
-            Step::Hear if !study.heard => ("Hoor hoe het klinkt.", Some("Luister")),
-            Step::Hear => ("", Some("Volgende")),
-        };
-
-        let actions = h_flex()
-            .when(recording_controls.is_some(), |d| d.hidden())
-            .gap_3()
-            .justify_center()
-            .when(!prompt.is_empty(), |d| d.child(hint(prompt, cx)))
-            .when_some(primary, |d, label| {
-                d.child(
-                    Button::new("primary")
-                        .primary()
-                        .tab_stop(false)
-                        .child(h_flex().gap_2().child(label).child(keycap("Spatie", cx)))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.advance(cx);
-                            this.study.focus.focus(window, cx);
-                        })),
-                )
-            })
-            .when(study.step == Step::Hear && !study.heard, |d| {
-                d.child(
-                    Button::new("skip")
-                        .outline()
-                        .tab_stop(false)
-                        .child(h_flex().gap_2().child("Volgende").child(keycap("Enter", cx)))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.commit(cx);
-                            this.study.focus.focus(window, cx);
-                        })),
-                )
-            });
-
-        let speech_grade = study.speech.as_ref().map(|s| s.grade);
-        let speech_panel = study.speech.is_some().then(|| self.render_speech_panel(cx));
-        let grades = matches!(study.step, Step::Score | Step::Hear).then(|| {
-            let colors = [theme.danger, theme.warning, theme.blue, theme.success];
-            h_flex().gap_2().w_full().max_w(px(600.)).children(Grade::ALL.iter().enumerate().map(|(i, grade)| {
-                let grade = *grade;
-                let chosen = study.grade == Some(grade);
-                v_flex()
-                    .id(SharedString::from(format!("grade-{}", grade.number())))
-                    .flex_1()
-                    .items_center()
-                    .gap_0p5()
-                    .pb_2()
-                    .overflow_hidden()
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(if chosen { colors[i] } else { theme.border })
-                    .bg(if chosen { theme.accent } else { theme.secondary })
-                    .hover(|s| s.bg(theme.secondary_hover))
-                    .cursor_pointer()
-                    .child(div().w_full().h(px(4.)).mb_1p5().bg(colors[i]))
-                    .child(div().font_weight(FontWeight::MEDIUM).child(grade.label()))
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(keycap(&grade.number().to_string(), cx))
-                            .child(describe(study.previews[combine(grade, speech_grade).number() as usize - 1])),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.grade(grade, cx);
-                        this.study.focus.focus(window, cx);
-                    }))
-            }))
-        });
-
-        let english = study.english_shown.then(|| {
-            div()
+        let meaning = study.english_shown.then(|| {
+            v_flex()
+                .items_center()
+                .gap_1()
                 .max_w(px(560.))
                 .pt_2()
                 .border_t_1()
                 .border_color(theme.border)
-                .text_color(theme.muted_foreground)
-                .italic()
                 .text_center()
-                .child(if card.english.is_empty() { "(geen vertaling)".to_string() } else { card.english.clone() })
+                .child(div().italic().text_color(theme.muted_foreground).child(if card.english.is_empty() {
+                    "(geen vertaling)".to_string()
+                } else {
+                    card.english.clone()
+                }))
+                .when(!card.note.is_empty(), |d| d.child(hint(card.note.clone(), cx)))
         });
 
-        let audio_ok = study.audio_allowed();
-        let tool = |id: &'static str, label: &'static str, key: &'static str, enabled: bool, cx: &mut Context<Self>| {
-            Button::new(id)
-                .ghost()
-                .small()
+        let reading = if study.mode == Mode::Read { self.render_reading_status(cx) } else { None };
+        let bottom = if study.scoring_open() {
+            self.render_scores(cx).into_any_element()
+        } else {
+            Button::new("reveal")
+                .primary()
                 .tab_stop(false)
-                .disabled(!enabled)
-                .child(h_flex().gap_1p5().child(label).child(keycap(key, cx)))
+                .child(h_flex().gap_2().child("Toon tekst").child(keycap("Spatie", cx)))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.advance(cx);
+                    this.study.focus.focus(window, cx);
+                }))
+                .into_any_element()
         };
-        let toolbar = h_flex()
-            .gap_2()
-            .justify_center()
-            .pt_3()
-            .border_t_1()
-            .border_color(theme.border)
-            .child(tool("translation", "Vertaling", "V", true, cx).on_click(cx.listener(|this, _, window, cx| {
-                this.toggle_english(cx);
-                this.study.focus.focus(window, cx);
-            })))
-            .child(tool("again", "Herhaal", "H", audio_ok, cx).on_click(cx.listener(|this, _, window, cx| {
-                this.hear(Speed::Normal, cx);
-                this.study.focus.focus(window, cx);
-            })))
-            .child(tool("slow", "Langzaam", "L", audio_ok, cx).on_click(cx.listener(|this, _, window, cx| {
-                this.hear(Speed::Slow, cx);
-                this.study.focus.focus(window, cx);
-            })))
-            .child(tool("edit", "Bewerken", "B", true, cx).on_click(cx.listener(|this, _, window, cx| {
-                this.edit_current(window, cx);
-            })));
 
         v_flex()
             .flex_1()
             .min_h_0()
+            .items_center()
+            .justify_center()
+            .gap_4()
+            .child(phrase)
+            .child(div().h_4().text_xs().text_color(theme.primary).child(sound))
+            .children(reading)
+            .children(meaning)
+            .child(self.render_tools(cx))
+            .child(bottom)
+    }
+
+    /// Test mijn uitspraak, Hoor de zin and Betekenis.
+    fn render_tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let study = &self.study;
+        let busy = self.busy_listening();
+        let tool = |id: &'static str, icon: Icon, label: &str, key: &str, cx: &App| {
+            Button::new(id)
+                .outline()
+                .tab_stop(false)
+                .icon(icon)
+                .child(h_flex().gap_2().child(label.to_string()).child(keycap(key, cx)))
+        };
+        let test = (study.mode == Mode::Read).then(|| {
+            let label = if study.recording.is_some() {
+                "Stop"
+            } else if study.judging {
+                "Even luisteren…"
+            } else if study.speech.is_some() || study.speech_note.is_some() {
+                "Opnieuw"
+            } else {
+                "Test mijn uitspraak"
+            };
+            tool("test-reading", icons::speak(), label, "Spatie", cx)
+                .disabled(!self.listener.is_installed() || study.judging)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.advance(cx);
+                    this.study.focus.focus(window, cx);
+                }))
+        });
+        h_flex()
+            .flex_wrap()
+            .justify_center()
+            .gap_2()
+            .children(test)
+            .child(tool("hear", icons::listen(), "Hoor de zin", "H", cx).disabled(busy).on_click(cx.listener(
+                |this, _, window, cx| {
+                    this.hear(Speed::Normal, cx);
+                    this.study.focus.focus(window, cx);
+                },
+            )))
             .child(
-                v_flex()
-                    .flex_1()
-                    .items_center()
-                    .justify_center()
-                    .gap_4()
-                    .child(steps)
-                    .child(phrase)
-                    .child(div().h_5().text_xs().text_color(theme.primary).child(sound))
-                    .when(show_note, |d| {
-                        d.child(div().max_w(px(560.)).text_center().text_color(theme.muted_foreground).child(card.note.clone()))
-                    })
-                    .children(english)
-                    .children(speech_panel)
-                    .children(recording_controls)
-                    .child(actions)
-                    .children(grades),
+                tool("meaning", icons::meaning(), "Betekenis", "V", cx)
+                    .selected(study.english_shown)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_english(cx);
+                        this.study.focus.focus(window, cx);
+                    })),
             )
-            .child(toolbar)
+    }
+
+    /// The four scores: how easily the sentence came back. Nothing else.
+    fn render_scores(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let open = !self.busy_listening();
+        let colors = [theme.danger, theme.warning, theme.blue, theme.success];
+        h_flex().gap_2().w_full().max_w(px(600.)).children(Grade::ALL.iter().enumerate().map(|(i, grade)| {
+            let grade = *grade;
+            v_flex()
+                .id(SharedString::from(format!("grade-{}", grade.number())))
+                .flex_1()
+                .items_center()
+                .gap_1()
+                .pb_2()
+                .overflow_hidden()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.secondary)
+                .child(div().w_full().h(px(4.)).mb_1p5().bg(colors[i]))
+                .child(div().font_weight(FontWeight::MEDIUM).child(grade.label()))
+                .child(keycap(&grade.number().to_string(), cx))
+                .when(!open, |d| d.opacity(0.5))
+                .when(open, |d| {
+                    d.cursor_pointer().hover(|s| s.bg(theme.secondary_hover)).on_click(cx.listener(
+                        move |this, _, window, cx| {
+                            this.score(grade, cx);
+                            this.study.focus.focus(window, cx);
+                        },
+                    ))
+                })
+        }))
     }
 
     fn render_study_empty(&mut self, cx: &mut Context<Self>) -> impl IntoElement {

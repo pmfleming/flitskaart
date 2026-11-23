@@ -9,37 +9,51 @@ press `V`.
 
 ## Studying
 
-Each card goes through four steps, and each one waits for you:
+Each card is one panel: the Dutch, three buttons, and the four scores. Use the
+buttons in any order, or none of them.
 
-1. **Show** – the Dutch appears.
-2. **Read** – press `Space` and read it aloud. Recording stops by itself when
-   you finish. Whisper, running on this laptop, writes down what it heard and
-   the app grades how understandable you were from 1 to 4; words it missed are
-   underlined. Press `Enter` instead to skip recording.
-3. **Score** – how well did you know it: Weet ik niet / Moeilijk / Gaat goed /
-   Makkelijk (`1`–`4`).
-4. **Hear** – press `Space` to hear the app say it, `Space` again for the next card.
+- **Test mijn uitspraak** (`Space`) – read the card aloud. Recording stops by
+  itself when you finish. Whisper, running on this laptop, writes down what it
+  heard and the app grades how understandable you were from 1 to 4; words it
+  missed are underlined in the card. The button then reads **Opnieuw** for
+  another try; the latest try counts.
+- **Hoor de zin** (`H`) – the sentence in the Dutch voice chosen in
+  Instellingen. Listening never changes how the review counts.
+- **Betekenis** (`V`) – the English and the note.
+- **Weet ik niet / Moeilijk / Gaat goed / Makkelijk** (`1`–`4`) – how easily
+  the sentence came back. This saves the review and shows the next card.
 
-The card is scheduled on the **lower** of your own grade and your
-pronunciation grade, so it comes back sooner if either is weak. Both are kept
-with every review.
+What you did before scoring decides how far your score is trusted. The panel
+doesn't show any of this:
+
+- **Read aloud, then scored** – counts in full. If your pronunciation grade is
+  lower than your own score, it is used instead.
+- **Scored only** – the card keeps 70% of the longer pause FSRS proposes
+  (`SCORE_ONLY_SHARE` in `crates/core/src/schedule.rs`).
+- **Opened the meaning** – counts as Moeilijk at best, and the pause does not
+  grow, even if you also read it aloud.
+- **Weet ik niet** always counts in full.
+
+A new card has no pause to grow yet, so only the grade rules apply to it. Your
+own score, the pronunciation grade, the grade used and the share are kept with
+every review.
 
 Pronunciation grades come from the share of the card's letters Whisper
 understood: 95%+ is 4 (Heel duidelijk), 85%+ is 3, 65%+ is 2, less is 1.
 
 | Key | What it does |
 | --- | --- |
-| `Space` | Opnemen (or Stop), then Luister, then Volgende |
-| `Enter` | Skip recording; later, next card without hearing it |
-| `1`–`4` | Score the card (you can change it until you move on) |
-| `R` / `O` | Record again / play your own recording |
+| `Space` | Test the reading (or stop the recording); in Luisteren, show the text |
+| `1`–`4` | Score the card and go to the next one |
+| `R` / `O` | Test again / play your own recording |
 | `Esc` | Cancel a recording |
-| `V` | Show or hide the English (counted per card) |
-| `H` / `L` | Hear it again / slowly (after scoring) |
+| `V` | Show or hide the meaning |
+| `H` / `L` | Hear the sentence / slowly |
 | `B` | Edit the card |
 
-Modes: **Spreken** (the cycle above), **Stil** (read silently and score, no sound) and
-**Luisteren** (the audio plays first with the text hidden).
+Modes: **Lezen** (the panel above) and **Luisteren** (the audio plays first with
+the text hidden; there is no reading test, so scores count in full unless you
+open the meaning).
 
 Scheduling is FSRS, the algorithm modern Anki uses. New cards are limited per
 day (10 by default, set in Instellingen).
@@ -96,10 +110,10 @@ words right, while the female voices built from audiobook recordings (MLS) got
 - `crates/core` – cards, FSRS scheduling, the Turso store, Piper voices and
   drafting. No UI code; tested with `cargo test`.
 - `crates/app` – the window, built with [GPUI Community Edition](https://gpui-ce.github.io)
-  and its component kit.
+  and its component kit. The study panel's own icons are in `crates/app/assets/icons`.
 - `scripts/capture.sh` – runs the app in a headless Weston session and saves a
-  screenshot. With `--screen <name>`, `--keys "space 3"` and
-  `--appearance donker` it can show any screen and study step; `--recording file.wav`
+  screenshot. With `--screen <name>`, `--keys "space v"` and
+  `--appearance donker` it can show any screen and study state; `--recording file.wav`
   stands in for the microphone, and `wacht` in `--keys` waits for Whisper.
 - `scripts/fetch-models.sh` – downloads the voices and the speech recognizer.
 - `crates/core/examples/` – `draft` (try the drafting prompt on a snippet) and

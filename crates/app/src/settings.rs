@@ -129,8 +129,7 @@ impl FlashcardsApp {
                     .max_w(px(640.))
                     .child(heading("Uitspraak"))
                     .child(hint(
-                        "In de stand Spreken neem je jezelf op. Whisper luistert op deze laptop en geeft je uitspraak een cijfer van 1 tot 4. \
-                         De laagste van je eigen beoordeling en je uitspraak bepaalt wanneer de kaart terugkomt.",
+                        "Met Test mijn uitspraak lees je een kaart hardop voor. Whisper luistert op deze laptop en geeft je uitspraak een cijfer van 1 tot 4.",
                         cx,
                     ))
                     .child(if self.listener.is_installed() {

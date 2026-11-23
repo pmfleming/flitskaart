@@ -3,6 +3,7 @@
 //! The recording is transcribed locally by Whisper (whisper.cpp). The closer
 //! the transcript is to the card, the easier the learner was to understand.
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -161,29 +162,37 @@ pub fn assess(card: &str, heard: &str) -> Assessment {
     Assessment { heard: heard.trim().to_string(), accuracy, grade, words }
 }
 
-/// The grade that schedules the card: the lower of how well the learner knew
-/// it and how understandable they were, so either weakness brings it back sooner.
-pub fn combine(own: Grade, speech: Option<Grade>) -> Grade {
-    match speech {
-        Some(speech) if speech.number() < own.number() => speech,
-        _ => own,
-    }
+/// Where in `card` the words the recognizer missed are, as byte ranges, so the
+/// card text itself can mark them. Each range covers the word's letters
+/// without surrounding punctuation. `words` comes from [`assess`] on the same text.
+pub fn missed_ranges(card: &str, words: &[WordMark]) -> Vec<Range<usize>> {
+    word_tokens(card)
+        .zip(words)
+        .filter(|(_, mark)| !mark.heard)
+        .filter_map(|(token, _)| {
+            let offset = token.as_ptr() as usize - card.as_ptr() as usize;
+            let start = token.find(char::is_alphanumeric)?;
+            let (last, letter) = token.char_indices().rfind(|(_, c)| c.is_alphanumeric())?;
+            Some(offset + start..offset + last + letter.len_utf8())
+        })
+        .collect()
 }
 
-/// Lower-case words without punctuation; hyphens split words.
+/// The card's words as written, punctuation attached; hyphens split words.
+fn word_tokens(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| c.is_whitespace() || c == '-').filter(|w| w.chars().any(char::is_alphanumeric))
+}
+
+/// Lower-case words without punctuation, split as [`word_tokens`].
 fn words(text: &str) -> Vec<String> {
-    text.split(|c: char| c.is_whitespace() || c == '-')
-        .map(|w| w.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>())
-        .filter(|w| !w.is_empty())
+    word_tokens(text)
+        .map(|w| w.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect())
         .collect()
 }
 
-/// The card's words as written, split the same way as [`words`].
+/// The card's words as written, split as [`word_tokens`].
 fn display_words(text: &str) -> Vec<String> {
-    text.split(|c: char| c.is_whitespace() || c == '-')
-        .filter(|w| w.chars().any(char::is_alphanumeric))
-        .map(str::to_string)
-        .collect()
+    word_tokens(text).map(str::to_string).collect()
 }
 
 fn edit_distance<T: PartialEq>(a: &[T], b: &[T]) -> usize {
@@ -273,10 +282,15 @@ mod tests {
     }
 
     #[test]
-    fn the_lower_grade_schedules_the_card() {
-        assert_eq!(combine(Grade::Easy, Some(Grade::Hard)), Grade::Hard);
-        assert_eq!(combine(Grade::Hard, Some(Grade::Easy)), Grade::Hard);
-        assert_eq!(combine(Grade::Comfortable, None), Grade::Comfortable);
+    fn missed_words_are_found_in_the_card_text() {
+        let result = assess(CARD, "Vandaag ben ik een programma het schrijven.");
+        let missed: Vec<_> = missed_ranges(CARD, &result.words).into_iter().map(|range| &CARD[range]).collect();
+        assert_eq!(missed, ["Linux", "aan"]);
+        // Punctuation stays outside the mark, and letters beyond ASCII are whole.
+        let card = "Hé, één café?";
+        let result = assess(card, "hé");
+        let missed: Vec<_> = missed_ranges(card, &result.words).into_iter().map(|range| &card[range]).collect();
+        assert_eq!(missed, ["één", "café"]);
     }
 
     #[test]

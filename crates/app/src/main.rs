@@ -5,6 +5,7 @@ mod app;
 mod audio;
 mod deck;
 mod drafts;
+mod icons;
 mod recorder;
 mod settings;
 mod speaking;

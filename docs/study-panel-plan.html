@@ -1,0 +1,417 @@
+<title>Study Panel Plan</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap">
+<style>
+  /* Layout: one reading column. The proposed panel sits near the top as a working mock; the rules and build steps follow as text and tables. */
+  :root {
+    --bg: #f4f6fb;
+    --surface: #ffffff;
+    --fg: #121a2c;
+    --muted: #56617b;
+    --line: #d4dbe9;
+    --accent: #1d3f9e;        /* Delft blue */
+    --accent-soft: #e2e9fa;
+    --again: #b3372f;
+    --hard: #9a6a0c;
+    --good: #1d3f9e;
+    --easy: #1f7a4d;
+    --font-display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+    --font-body: "Inter", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1220; --surface: #161d31; --fg: #e7ebf6; --muted: #9ba7c3; --line: #2a3452;
+      --accent: #93acf6; --accent-soft: #1c2950;
+      --again: #f08a80; --hard: #e0b352; --good: #93acf6; --easy: #6fcf9c;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1220; --surface: #161d31; --fg: #e7ebf6; --muted: #9ba7c3; --line: #2a3452;
+    --accent: #93acf6; --accent-soft: #1c2950;
+    --again: #f08a80; --hard: #e0b352; --good: #93acf6; --easy: #6fcf9c;
+    color-scheme: dark;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.6;
+  }
+  .page {
+    max-width: 780px;
+    margin: 0 auto;
+    padding-block: 48px 72px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex;
+    flex-direction: column;
+    gap: 44px;
+  }
+  section, header { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.2; }
+  h1 { font-size: 2.1rem; font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; font-weight: 600; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.05rem; font-weight: 600; margin-top: 10px; }
+  p, ul, ol { margin: 0; }
+  p, li { max-width: 68ch; }
+  ul, ol { padding-left: 1.25em; display: flex; flex-direction: column; gap: 6px; }
+  .lede { font-size: 1.1rem; color: var(--muted); max-width: 62ch; }
+  .eyebrow { font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+  .caption { font-size: 0.86rem; color: var(--muted); }
+  code, kbd { font-family: var(--font-mono); font-size: 0.86em; }
+  code { background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+  kbd { border: 1px solid var(--line); border-bottom-width: 2px; background: var(--surface); color: var(--muted); padding: 0 6px; border-radius: 4px; white-space: nowrap; }
+  .icon { width: 1.25em; height: 1.25em; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* the proposed panel, as a working mock */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px 18px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    min-width: 0;
+  }
+  .panel-bar { align-self: stretch; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; font-size: 0.8rem; color: var(--muted); }
+  .link { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  .dutch { font-family: var(--font-display); font-size: clamp(1.35rem, 4.6vw, 1.9rem); font-weight: 500; line-height: 1.25; text-align: center; text-wrap: balance; max-width: 22ch; padding-top: 10px; }
+  .panel.is-spoken .missed { color: var(--again); text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 4px; }
+  .result { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 10px; font-size: 0.9rem; color: var(--muted); }
+  .result b { color: var(--fg); font-weight: 600; }
+  .chip { font-family: var(--font-mono); font-weight: 500; color: var(--surface); background: var(--good); border-radius: 4px; padding: 0 8px; }
+  .english { font-style: italic; color: var(--muted); text-align: center; border-top: 1px dashed var(--line); padding-top: 10px; align-self: stretch; max-width: none; }
+  .tools { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  .tool {
+    font: inherit; font-size: 0.92rem; font-weight: 500;
+    display: inline-flex; align-items: center; gap: 8px;
+    color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 12px; cursor: pointer;
+  }
+  .tool .icon { color: var(--accent); }
+  .tool:hover:not(:disabled) { border-color: var(--accent); }
+  .tool:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6; }
+  .tool[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+  .scores { align-self: stretch; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .score {
+    font: inherit; color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-top: 4px solid var(--tone); border-radius: 8px;
+    padding: 8px 6px 9px; cursor: pointer; min-width: 0;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  .score:hover { border-color: var(--tone); }
+  .score[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--tone); }
+  .score .name { font-weight: 500; font-size: 0.92rem; }
+  .score .when { font-size: 0.8rem; color: var(--muted); display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+  .s1 { --tone: var(--again); } .s2 { --tone: var(--hard); } .s3 { --tone: var(--good); } .s4 { --tone: var(--easy); }
+  .signal { font-size: 0.86rem; color: var(--muted); text-align: center; }
+  .signal b { color: var(--fg); font-weight: 600; }
+  .tool:focus-visible, .score:focus-visible, .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (max-width: 520px) { .scores { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+  /* the three icons, shown large for approval */
+  .icons { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px 20px; }
+  .icons li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 14px; align-items: center; max-width: none; }
+  .icons .icon { width: 44px; height: 44px; grid-row: span 2; color: var(--accent); stroke-width: 1.5; }
+  .icons strong { font-family: var(--font-display); font-weight: 600; align-self: end; }
+  .icons span { font-size: 0.86rem; color: var(--muted); line-height: 1.4; align-self: start; }
+
+  /* tables */
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.92rem; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 14px 8px 0; border-bottom: 1px solid var(--line); }
+  th { font-family: var(--font-mono); font-size: 0.72rem; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  td:first-child { font-weight: 500; }
+  .nowrap td { white-space: nowrap; }
+  .t1 { color: var(--again); } .t2 { color: var(--hard); } .t3 { color: var(--good); } .t4 { color: var(--easy); }
+
+  .rules { padding-left: 1.4em; gap: 10px; }
+  .rules li::marker, .phases li::marker { font-family: var(--font-mono); color: var(--accent); }
+  .phases { padding-left: 1.4em; gap: 12px; }
+  .phases strong { font-family: var(--font-display); }
+
+  .confirm { background: var(--accent-soft); border-radius: 10px; padding: 18px 20px; gap: 12px; }
+  .confirm h2 { border: 0; padding: 0; }
+  .confirm ol { gap: 12px; }
+  .rec { font-weight: 600; }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <!-- 24px grid, 1.75 stroke, one colour: the same files ship as crates/app/assets/icons/*.svg -->
+    <symbol id="i-speak" viewBox="0 0 24 24">
+      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H11l-4.5 4v-4A2.5 2.5 0 0 1 4 13.5z"/>
+      <path d="M8.5 8.5v2M12 6.5v6M15.5 7.75v3.5"/>
+    </symbol>
+    <symbol id="i-listen" viewBox="0 0 24 24">
+      <path d="M9 9a5 5 0 0 1 10 0c0 4.5-4.5 5-4.5 8.5a2.75 2.75 0 0 1-5.5 0"/>
+      <path d="M16 9a2 2 0 0 0-4 0"/>
+      <path d="M5.5 6a5 5 0 0 1 0 7M2.75 8a2 2 0 0 1 0 3"/>
+    </symbol>
+    <symbol id="i-meaning" viewBox="0 0 24 24">
+      <path d="M10 14H5.5A2.5 2.5 0 0 1 3 11.5v-6A2.5 2.5 0 0 1 5.5 3h6A2.5 2.5 0 0 1 14 5.5V10"/>
+      <path d="M5.5 9.5 7.75 5 10 9.5M6.3 8h2.9"/>
+      <rect x="10" y="10" width="11" height="11" rx="2.5"/>
+      <path d="M13 14.25h5M13 17h3"/>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="page">
+
+  <header>
+    <span class="eyebrow">Plan · 23 November 2026 · not built yet</span>
+    <h1>One study panel, three signals</h1>
+    <p class="lede">The card shows its Dutch text with everything reachable at once: test your reading, hear the sentence spoken, look up the meaning, and give your own score. What you do before you score decides how much the app trusts that score.</p>
+  </header>
+
+  <section>
+    <h2>The panel</h2>
+    <p>This mock works. The four score buttons ask one thing: how easily did you recall this sentence? The panel never says when the card will come back or how a score will be counted. That happens out of sight.</p>
+
+    <div class="panel" id="panel">
+      <div class="panel-bar">
+        <span>Voorbeeldkaart</span>
+        <button type="button" class="link" id="mock-reset">Begin opnieuw</button>
+      </div>
+
+      <p class="dutch">Vandaag ben ik een Linux-programma <span class="missed">aan</span> het schrijven.</p>
+
+      <div class="result" id="mock-result" hidden>
+        <span>Uitspraak</span> <span class="chip">3</span> <b>Goed te verstaan</b> <span>91% verstaan</span> <span><button type="button" class="link" id="mock-own">Mijn opname</button> <kbd>O</kbd></span>
+      </div>
+
+      <p class="english" id="mock-english" hidden>Today I am writing a Linux program.</p>
+
+      <div class="tools">
+        <button type="button" class="tool" id="mock-speak">
+          <svg class="icon" aria-hidden="true"><use href="#i-speak"/></svg>
+          <span id="mock-speak-label">Test mijn uitspraak</span> <kbd>Spatie</kbd>
+        </button>
+        <button type="button" class="tool" id="mock-listen">
+          <svg class="icon" aria-hidden="true"><use href="#i-listen"/></svg>
+          Hoor de zin <kbd>H</kbd>
+        </button>
+        <button type="button" class="tool" id="mock-meaning" aria-pressed="false">
+          <svg class="icon" aria-hidden="true"><use href="#i-meaning"/></svg>
+          Betekenis <kbd>V</kbd>
+        </button>
+      </div>
+
+      <div class="scores">
+        <button type="button" class="score s1" id="mock-score-1" aria-pressed="false"><span class="name">Weet ik niet</span><span class="when"><kbd>1</kbd></span></button>
+        <button type="button" class="score s2" id="mock-score-2" aria-pressed="false"><span class="name">Moeilijk</span><span class="when"><kbd>2</kbd></span></button>
+        <button type="button" class="score s3" id="mock-score-3" aria-pressed="false"><span class="name">Gaat goed</span><span class="when"><kbd>3</kbd></span></button>
+        <button type="button" class="score s4" id="mock-score-4" aria-pressed="false"><span class="name">Makkelijk</span><span class="when"><kbd>4</kbd></span></button>
+      </div>
+
+      
+    </div>
+
+    <p class="caption"><strong>Out of sight, never shown in the app:</strong> <span id="mock-note">Weaker signal so far: a score with nothing to back it up. “Gaat goed” would bring this card back in 5 weken.</span></p>
+    <p class="caption">The example card has been practised three times and was last seen two weeks ago; the pauses come from the app's own scheduler. In the mock, “Test mijn uitspraak” skips the recording and shows an example result: grade 3, one word missed.</p>
+
+    <h3>The three custom icons</h3>
+    <ul class="icons">
+      <li><svg class="icon" aria-hidden="true"><use href="#i-speak"/></svg><strong>Speak</strong><span>A speech bubble with your voice inside it. Test mijn uitspraak.</span></li>
+      <li><svg class="icon" aria-hidden="true"><use href="#i-listen"/></svg><strong>Listen</strong><span>An ear with sound arriving. Hoor de zin.</span></li>
+      <li><svg class="icon" aria-hidden="true"><use href="#i-meaning"/></svg><strong>Meaning</strong><span>A word card with its explanation card. Betekenis.</span></li>
+    </ul>
+    <p class="caption">Drawn for this app on a 24-pixel grid in one line weight, so they take the theme colour like the rest of the interface. Say the word if any of them should look different.</p>
+  </section>
+
+  <section>
+    <h2>What each control does</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Control</th><th>Key</th><th>What happens</th><th>Effect on the review</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Test mijn uitspraak</td><td><kbd>Spatie</kbd></td>
+            <td>Records you reading the card. Stops by itself when you finish, or on a second press. The app then shows a pronunciation grade from 1 to 4, the share it understood, and underlines the words it missed in the card text. The button becomes “Opnieuw” for another try; the latest try counts. “Mijn opname” beside the result plays your recording back (<kbd>O</kbd>).</td>
+            <td>Makes the review count in full. A pronunciation grade below your own score replaces it.</td>
+          </tr>
+          <tr>
+            <td>Hoor de zin</td><td><kbd>H</kbd></td>
+            <td>Plays the sentence in the Dutch voice you chose in the settings. Available at any moment, as often as you like. <kbd>L</kbd> plays it slowly.</td>
+            <td>None. Listening never changes how the review counts.</td>
+          </tr>
+          <tr>
+            <td>Betekenis</td><td><kbd>V</kbd></td>
+            <td>Shows the English, and the Dutch note if the card has one. Press again to hide. Looking once is remembered for this review even if you hide it again.</td>
+            <td>Negative. The review counts as Moeilijk at best and the pause does not grow.</td>
+          </tr>
+          <tr>
+            <td>Score 1 to 4</td><td><kbd>1</kbd>–<kbd>4</kbd></td>
+            <td>Saves the review and shows the next card straight away. Available from the first moment, so you can skip speaking. Disabled only while a recording is running or being judged.</td>
+            <td>Required. Alone, it counts at 70%.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The last column is for this plan only. The score buttons carry their name and key and nothing else: no pause, no “counts as” line. You mark how easily the sentence came back, and the app does the rest without comment. How scores are counted will be described in a user manual, written later and outside this plan.</p>
+  </section>
+
+  <section>
+    <h2>How a review is counted</h2>
+    <p>None of this appears on the panel. The scheduler (FSRS) takes a score from 1 to 4 and proposes a longer pause when the score is good. Two things are new: evidence can lower the score, and evidence decides how much of that longer pause you get.</p>
+    <ol class="rules">
+      <li><strong>Start with your own score.</strong> Nothing is saved without it.</li>
+      <li><strong>Lower it where the evidence disagrees.</strong> If the app understood you less well than you scored yourself, the pronunciation grade is used (this is today's rule). If you opened the meaning, the score is Moeilijk at best.</li>
+      <li><strong>Grant a share of the longer pause.</strong> Spoke and scored: all of it. Scored only: 70% of the growth. Opened the meaning: none, the card returns after the same pause as last time.</li>
+    </ol>
+    <p>“Weet ik niet” always counts in full, whatever else you did. Nobody claims a miss by accident, so it needs no evidence. A brand-new card has no pause to grow yet, so only rule 2 applies on its first review.</p>
+
+    <h3>The example card, every case</h3>
+    <div class="table-wrap">
+      <table class="nowrap">
+        <thead><tr><th>Before scoring you…</th><th>Signal</th><th class="t1">Weet ik niet</th><th class="t2">Moeilijk</th><th class="t3">Gaat goed</th><th class="t4">Makkelijk</th></tr></thead>
+        <tbody>
+          <tr><td>Spoke, understood clearly</td><td>Strongest</td><td>5 min</td><td>3 weken</td><td>7 weken</td><td>4 maanden</td></tr>
+          <tr><td>Did nothing else</td><td>Weaker</td><td>5 min</td><td>3 weken</td><td>5 weken</td><td>3 maanden</td></tr>
+          <tr><td>Opened the meaning</td><td>Negative</td><td>5 min</td><td>2 weken</td><td>2 weken</td><td>2 weken</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">Previous pause: 2 weken. Speaking does not rescue a review where you also opened the meaning; the third row applies either way.</p>
+
+    <h3>What skipping the speaking adds up to</h3>
+    <p>A new card answered “Gaat goed” every time. The difference starts small and compounds, because each review builds on the one before.</p>
+    <div class="table-wrap">
+      <table class="nowrap">
+        <thead><tr><th>Review</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th></tr></thead>
+        <tbody>
+          <tr><td>Spoke each time</td><td>10 min</td><td>4 dagen</td><td>2 weken</td><td>7 weken</td><td>5 maanden</td><td>12 maanden</td><td>2 jaar</td></tr>
+          <tr><td>Score only</td><td>10 min</td><td>4 dagen</td><td>11 dagen</td><td>4 weken</td><td>2 maanden</td><td>5 maanden</td><td>11 maanden</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">Computed with the app's scheduler and its default settings, with the day-spreading turned off so the figures are repeatable. The 70% is one number in the code and easy to change after a week of real use.</p>
+  </section>
+
+  <section>
+    <h2>What changes from today</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Today</th><th>After</th></tr></thead>
+        <tbody>
+          <tr><td>Three modes: Spreken, Stil, Luisteren</td><td>Two: Lezen (this panel) and Luisteren (unchanged). Speaking is a choice per card, so Spreken and Stil merge.</td></tr>
+          <tr><td>Steps in a strip: Lezen, Beoordelen, Luisteren</td><td>No steps. Every control is on the panel from the start.</td></tr>
+          <tr><td>“Opnemen” or “Zonder opname”, then score</td><td>Speak if you want to, then score. Skipping is just pressing a score.</td></tr>
+          <tr><td>The voice plays only after scoring in Spreken, and never in Stil</td><td>The voice has its own button and plays at any moment. The score saves and the next card appears.</td></tr>
+          <tr><td>Opening the translation is counted but changes nothing</td><td>It lowers the review, as described above.</td></tr>
+          <tr><td>A score without speaking counts the same as one with</td><td>It counts at 70%.</td></tr>
+          <tr><td>Each score button shows the pause it would give, and a line says when your score was lowered</td><td>Both go. The buttons show their name and key only.</td></tr>
+          <tr><td>Toolbar: Vertaling, Herhaal, Langzaam, Bewerken</td><td>The three icon buttons. Herhaal becomes “Hoor de zin”, Langzaam keeps <kbd>L</kbd> without a button, and Bewerken moves to the header and keeps <kbd>B</kbd>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Old reviews stay as they are. Each new review also records how much it counted, so the history can show later whether 70% was the right figure.</p>
+  </section>
+
+  <section>
+    <h2>Build order</h2>
+    <ol class="phases">
+      <li><strong>The counting rules.</strong> One function in <code>crates/core</code> takes your score, the pronunciation grade if there is one, and whether the meaning was opened, and returns the score to use and the share to grant. It replaces <code>combine</code> in <code>speech.rs</code>. Tests cover every row of the tables above.</li>
+      <li><strong>The scheduler.</strong> <code>schedule.rs</code> applies the share to the growth FSRS proposes, when a review is saved. The four preview pauses are no longer worked out for the screen. <code>store.rs</code> saves the share with each review in a new column, added to existing deck files on open like the speech columns were.</li>
+      <li><strong>The icons.</strong> Three SVG files in <code>crates/app/assets/icons</code>, loaded ahead of the interface kit's built-in set in <code>main.rs</code>.</li>
+      <li><strong>The panel.</strong> Rebuild the card view in <code>study.rs</code> and fold the recording controls from <code>speaking.rs</code> into the test button: idle, recording with the level meter, judging, judged. Remove the step strip and the hear-after-scoring step. The voice clip is prepared when the card appears, so button 2 answers at once. Take the pause off the score buttons and drop the “Telt als” line.</li>
+      <li><strong>Check it for real.</strong> Run the app headless with a prepared recording through <code>scripts/capture.sh</code> and screenshot each state: fresh, recording, judged, meaning open, speech recognition not installed. Then update the README.</li>
+    </ol>
+    <p>Steps 1 and 2 change scheduling without touching the screen, so they can be tested on their own before the panel is rebuilt.</p>
+  </section>
+
+  <section class="confirm">
+    <h2>Settled, and what I'll assume</h2>
+    <p>The first point is decided. The other three go ahead as suggested unless you say otherwise.</p>
+    <ol>
+      <li><strong>Settled: the voice.</strong> Button 2 plays the Dutch speaker chosen in the settings. Listening never affects the review, before or after you speak.</li>
+      <li><strong>Luisteren mode.</strong> It hides the text and plays the card, which doesn't fit this panel. <span class="rec">My suggestion:</span> leave it as it is, behind a two-way switch in the header.</li>
+      <li><strong>How hard the signals bite.</strong> <span class="rec">My suggestion:</span> 70% for score only, and for the meaning “Moeilijk at best, no longer pause”. Gentler would be dropping the no-growth part, so an opened meaning still grows the pause a little (2 weken becomes 3). Harsher would be treating it as “Weet ik niet”, which brings the card back in minutes.</li>
+      <li><strong>The Dutch labels.</strong> “Test mijn uitspraak”, “Hoor de zin”, “Betekenis”. <span class="rec">My suggestion:</span> these three, since the test judges how well you are understood. “Lees voor” is the alternative if you want it closer to “reading”.</li>
+    </ol>
+  </section>
+
+</div>
+
+<script>
+  (function () {
+    // Pauses from the app's scheduler for the example card, per own score 1..4.
+    var PAUSE = {
+      full: ['5 min', '3 weken', '7 weken', '4 maanden'],
+      scoreOnly: ['5 min', '3 weken', '5 weken', '3 maanden'],
+      meaning: ['5 min', '2 weken', '2 weken', '2 weken']
+    };
+    var NAMES = ['Weet ik niet', 'Moeilijk', 'Gaat goed', 'Makkelijk'];
+    var SPEECH_GRADE = 3;
+    var state = { spoke: false, peeked: false, english: false, chosen: 0 };
+    var $ = function (id) { return document.getElementById(id); };
+
+    function counted(own) {
+      var grade = own;
+      if (state.spoke) grade = Math.min(grade, SPEECH_GRADE);
+      if (state.peeked) grade = Math.min(grade, 2);
+      return grade;
+    }
+    function pause(own) {
+      var row = state.peeked ? PAUSE.meaning : state.spoke ? PAUSE.full : PAUSE.scoreOnly;
+      return row[counted(own) - 1];
+    }
+
+    function render() {
+      $('panel').classList.toggle('is-spoken', state.spoke);
+      $('mock-result').hidden = !state.spoke;
+      $('mock-english').hidden = !state.english;
+      $('mock-speak-label').textContent = state.spoke ? 'Opnieuw' : 'Test mijn uitspraak';
+      $('mock-meaning').setAttribute('aria-pressed', String(state.english));
+      for (var own = 1; own <= 4; own++) {
+        var button = $('mock-score-' + own);
+        button.setAttribute('aria-pressed', String(state.chosen === own));
+      }
+
+      var note;
+      var would = ' “Gaat goed” would bring this card back in ' + pause(3) + '.';
+      if (state.chosen) {
+        var grade = counted(state.chosen);
+        note = 'Saved: you pressed ' + NAMES[state.chosen - 1]
+          + (grade < state.chosen ? ', counted as ' + NAMES[grade - 1] : '')
+          + ', back in ' + pause(state.chosen) + '. In the app the next card appears now.';
+      } else if (state.peeked) {
+        note = 'Negative signal: the meaning was opened, so no score can lengthen the pause.' + would;
+      } else if (state.spoke) {
+        note = 'Strongest signal: the app judged your reading and you add your own score.' + would;
+      } else {
+        note = 'Weaker signal so far: a score with nothing to back it up.' + would;
+      }
+      $('mock-note').textContent = note;
+    }
+
+    $('mock-speak').addEventListener('click', function () { state.spoke = true; state.chosen = 0; render(); });
+    $('mock-meaning').addEventListener('click', function () {
+      state.english = !state.english;
+      if (state.english) state.peeked = true;
+      state.chosen = 0;
+      render();
+    });
+    $('mock-listen').addEventListener('click', function () {
+      $('mock-note').textContent = 'In the app this plays the sentence in the Dutch voice chosen in the settings. It does not change the review.';
+    });
+    $('mock-own').addEventListener('click', function () {
+      $('mock-note').textContent = 'In the app this plays your own recording back. It does not change the review.';
+    });
+    [1, 2, 3, 4].forEach(function (own) {
+      $('mock-score-' + own).addEventListener('click', function () { state.chosen = own; render(); });
+    });
+    $('mock-reset').addEventListener('click', function () {
+      state = { spoke: false, peeked: false, english: false, chosen: 0 };
+      render();
+    });
+  })();
+</script>
