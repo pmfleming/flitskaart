@@ -6,6 +6,7 @@ mod audio;
 mod deck;
 mod drafts;
 mod icons;
+mod logging;
 mod mic_test;
 mod recorder;
 mod settings;
@@ -51,10 +52,11 @@ fn dev_args() -> DevArgs {
 fn main() {
     let dev = dev_args();
     let paths = Paths::from_env();
+    logging::init(&paths.log_file());
     let store = match Store::open(&paths) {
         Ok(store) => store,
         Err(err) => {
-            eprintln!("Kan de kaarten niet openen in {}: {err:#}", paths.root().display());
+            logging::error("start", format!("Kan de kaarten niet openen in {}: {err:#}", paths.root().display()));
             std::process::exit(1);
         }
     };

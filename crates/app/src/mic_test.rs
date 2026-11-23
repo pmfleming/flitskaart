@@ -81,7 +81,7 @@ impl FlashcardsApp {
         if let Some(path) = self.fake_recording.clone() {
             match recorder::from_file(&path, self.settings.input_boost) {
                 Ok(captured) => self.finish_mic_test(captured, cx),
-                Err(err) => self.mic_test.error = Some(format!("{err:#}").into()),
+                Err(err) => self.mic_test.error = Some(crate::logging::error("microfoontest", format!("{err:#}")).into()),
             }
             cx.notify();
             return;
@@ -99,7 +99,7 @@ impl FlashcardsApp {
                         test.level = 0.0;
                         match recording.finish() {
                             Ok(captured) => this.finish_mic_test(captured, cx),
-                            Err(err) => this.mic_test.error = Some(format!("{err:#}").into()),
+                            Err(err) => this.mic_test.error = Some(crate::logging::error("microfoontest", format!("{err:#}")).into()),
                         }
                         cx.notify();
                         return true;
@@ -124,12 +124,13 @@ impl FlashcardsApp {
 
     fn finish_mic_test(&mut self, captured: Captured, cx: &mut Context<Self>) {
         let loudness = recorder::loudness(&captured);
+        crate::logging::info(format!("Microfoontest: {loudness:?}"));
         let path = self.mic_test_path();
         let saved = !captured.samples.is_empty()
             && match write_wav_16k(&path, &captured.samples, captured.rate, captured.channels) {
                 Ok(()) => true,
                 Err(err) => {
-                    self.mic_test.error = Some(format!("{err:#}").into());
+                    self.mic_test.error = Some(crate::logging::error("microfoontest", format!("{err:#}")).into());
                     false
                 }
             };
@@ -152,7 +153,7 @@ impl FlashcardsApp {
                             result.heard = Some(heard);
                         }
                     }
-                    Err(err) => test.error = Some(format!("{err:#}").into()),
+                    Err(err) => test.error = Some(crate::logging::error("microfoontest", format!("{err:#}")).into()),
                 }
                 this.show_mic_test_result();
                 cx.notify();

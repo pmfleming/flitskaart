@@ -1733,6 +1733,7 @@ dependencies = [
  "chrono",
  "dutch-flashcards-core",
  "gpui_ce_kit",
+ "libc",
  "rodio",
 ]
 

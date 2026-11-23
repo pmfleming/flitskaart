@@ -96,6 +96,13 @@ Turso database), generated speech (`audio/`, one WAV per phrase, voice and
 speed), the voices (`voices/`), Whisper (`models/`) and your latest
 recording (`recordings/`). Copy the folder to back it up.
 
+`flitskaart.log` in the same folder is the app's log: every error it shows,
+panics with a backtrace, each recording's device, format and timing, and
+whatever audio libraries print to stderr. Lines also go to the terminal. Past
+1 MB it moves to `flitskaart.log.1` and a new log starts. When something goes
+wrong, the end of this file says what happened. A crash in native code
+(a segfault) can't be logged, but the last line shows what the app was doing.
+
 | Variable | Default |
 | --- | --- |
 | `DUTCH_FLASHCARDS_DATA` | `$XDG_DATA_HOME/dutch-flashcards` |

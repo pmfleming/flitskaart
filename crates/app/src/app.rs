@@ -146,7 +146,8 @@ impl FlashcardsApp {
     }
 
     pub fn error(&mut self, text: impl std::fmt::Display) {
-        self.notice = Some(Notice { text: text.to_string().into(), is_error: true });
+        let text = crate::logging::error(self.screen.label(), text);
+        self.notice = Some(Notice { text: text.into(), is_error: true });
     }
 
     pub fn info(&mut self, text: impl Into<SharedString>) {

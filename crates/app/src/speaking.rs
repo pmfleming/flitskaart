@@ -37,7 +37,7 @@ impl FlashcardsApp {
         if let Some(path) = self.fake_recording.clone() {
             match recorder::from_file(&path, self.settings.input_boost) {
                 Ok(captured) => self.judge(captured, cx),
-                Err(err) => self.study.speech_note = Some(format!("{err:#}").into()),
+                Err(err) => self.study.speech_note = Some(crate::logging::error("opname", format!("{err:#}")).into()),
             }
             cx.notify();
             return;
@@ -55,7 +55,7 @@ impl FlashcardsApp {
                         this.study.level = 0.0;
                         match recording.finish() {
                             Ok(captured) => this.judge(captured, cx),
-                            Err(err) => this.study.speech_note = Some(format!("{err:#}").into()),
+                            Err(err) => this.study.speech_note = Some(crate::logging::error("opname", format!("{err:#}")).into()),
                         }
                         cx.notify();
                         return true;
@@ -104,7 +104,7 @@ impl FlashcardsApp {
         }
         let path = self.last_recording();
         if let Err(err) = write_wav_16k(&path, &captured.samples, captured.rate, captured.channels) {
-            self.study.speech_note = Some(format!("{err:#}").into());
+            self.study.speech_note = Some(crate::logging::error("opname", format!("{err:#}")).into());
             return;
         }
         let Some(card) = &self.study.card else { return };
@@ -125,7 +125,7 @@ impl FlashcardsApp {
                 }
                 match result {
                     Ok(assessment) => this.study.speech = Some(assessment),
-                    Err(err) => this.study.speech_note = Some(format!("{err:#}").into()),
+                    Err(err) => this.study.speech_note = Some(crate::logging::error("opname", format!("{err:#}")).into()),
                 }
                 cx.notify();
             });

@@ -74,7 +74,7 @@ impl FlashcardsApp {
                         this.add.error = Some("Claude vond niets om te leren in dit stuk.".into());
                     }
                     Ok(cards) => this.store_drafts(&snippet, &steer, cards, window, cx),
-                    Err(err) => this.add.error = Some(format!("{err:#}").into()),
+                    Err(err) => this.add.error = Some(crate::logging::error("toevoegen", format!("{err:#}")).into()),
                 }
                 cx.notify();
             });
@@ -96,7 +96,7 @@ impl FlashcardsApp {
                 self.show(Screen::Drafts, window, cx);
                 self.info(format!("{} concepten gemaakt. Controleer ze en bewaar wat je wilt leren.", ids.len()));
             }
-            Err(err) => self.add.error = Some(format!("De kaarten zijn niet bewaard: {err:#}").into()),
+            Err(err) => self.add.error = Some(crate::logging::error("toevoegen", format!("De kaarten zijn niet bewaard: {err:#}")).into()),
         }
         cx.notify();
     }

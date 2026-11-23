@@ -55,6 +55,11 @@ impl Paths {
         self.root.join("models")
     }
 
+    /// The app's log: errors, panics and the recording steps.
+    pub fn log_file(&self) -> PathBuf {
+        self.root.join("flitskaart.log")
+    }
+
     /// The learner's latest recordings.
     pub fn recordings(&self) -> PathBuf {
         self.root.join("recordings")
