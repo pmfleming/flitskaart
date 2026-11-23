@@ -1,6 +1,9 @@
 //! Everything the app does except drawing the window: cards, scheduling,
-//! storage, the Dutch voice and turning conversation snippets into cards.
+//! storage, the Dutch voice, practice conversations and turning conversations
+//! into cards.
 
+pub mod claude;
+pub mod conversation;
 pub mod drafting;
 pub mod inputs;
 pub mod model;

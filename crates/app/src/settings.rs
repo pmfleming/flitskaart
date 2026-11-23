@@ -1,10 +1,10 @@
-//! Instellingen: the voice, the microphone test, the colours and the daily
-//! limit for new cards.
+//! Instellingen: the voice, the microphone & speech check, the colours and
+//! the daily limit for new cards.
 
 use dutch_flashcards_core::store::Appearance;
 use dutch_flashcards_core::voice::{self, Gender, SAMPLE, Speed, VoiceOption};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, Div, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
@@ -12,10 +12,11 @@ use gpui_kit::{
 };
 
 use crate::app::FlashcardsApp;
-use crate::ui::{hint, section};
+use crate::icons;
+use crate::ui::{hint, section, segment_button, segmented_bar, surface};
 
-/// The microphone test is the third section of Instellingen.
-pub const MICROPHONE_SECTION: usize = 2;
+/// The microphone & speech section is the second item inside Instellingen.
+pub const MICROPHONE_SECTION: usize = 1;
 
 impl FlashcardsApp {
     fn set_gender(&mut self, gender: Gender, cx: &mut Context<Self>) {
@@ -49,57 +50,72 @@ impl FlashcardsApp {
     }
 
     pub fn render_settings(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let recognizer = if self.listener.is_installed() {
-            hint("Spraakherkenning is geïnstalleerd.", cx)
-        } else {
-            hint("Spraakherkenning ontbreekt. Installeer die met scripts/fetch-models.sh.", cx).text_color(cx.theme().danger)
-        };
+        let appearance_card = section("Weergave", "Systeem volgt de lichte of donkere stand van je bureaublad.", cx)
+            .flex_1()
+            .min_w(px(280.))
+            .child(h_flex().child(segmented_bar(cx).children(Appearance::ALL.map(|appearance| {
+                segment_button(appearance.as_str(), appearance.label(), self.settings.appearance == appearance, cx).on_click(
+                    cx.listener(move |this, _, window, cx| this.set_appearance(appearance, window, cx)),
+                )
+            }))));
+
+        let per_day = self.settings.new_per_day;
+        let limit_card = section("Nieuwe kaarten per dag", "Herhalingen komen altijd.", cx)
+            .flex_1()
+            .min_w(px(240.))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Button::new("fewer")
+                            .outline()
+                            .small()
+                            .disabled(per_day == 0)
+                            .label("−")
+                            .on_click(cx.listener(|this, _, _, cx| this.change_new_per_day(-1, cx))),
+                    )
+                    .child(div().w(px(44.)).text_center().text_lg().font_weight(FontWeight::SEMIBOLD).child(per_day.to_string()))
+                    .child(
+                        Button::new("more")
+                            .outline()
+                            .small()
+                            .disabled(per_day >= 100)
+                            .label("+")
+                            .on_click(cx.listener(|this, _, _, cx| this.change_new_per_day(1, cx))),
+                    ),
+            );
+
         v_flex()
             .id("settings")
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.settings_scroll)
             .p_5()
-            .gap_6()
-            .child(self.render_voices(cx))
             .child(
-                section(
-                    "Uitspraak",
-                    "Met Test mijn uitspraak lees je een kaart hardop voor. Whisper luistert op deze laptop en geeft je uitspraak een cijfer van 1 tot 4.",
-                    cx,
-                )
-                .child(recognizer),
+                v_flex()
+                    .w_full()
+                    .max_w(px(720.))
+                    .mx_auto()
+                    .gap_4()
+                    .pb_6()
+                    .child(self.render_voices(cx))
+                    .child(self.render_mic_test(cx))
+                    .child(h_flex().flex_wrap().items_stretch().gap_4().child(appearance_card).child(limit_card))
+                    .child(section("Gegevens", format!("Je kaarten en geluid staan in {}", self.paths.root().display()), cx)),
             )
-            .child(self.render_mic_test(cx))
-            .child(section("Weergave", "Systeem volgt de lichte of donkere stand van je bureaublad.", cx).child(
-                h_flex().gap_1().children(Appearance::ALL.map(|appearance| {
-                    Button::new(appearance.as_str())
-                        .outline()
-                        .label(appearance.label())
-                        .selected(self.settings.appearance == appearance)
-                        .on_click(cx.listener(move |this, _, window, cx| this.set_appearance(appearance, window, cx)))
-                })),
-            ))
-            .child(section("Nieuwe kaarten per dag", "Hoeveel nieuwe kaarten je per dag leert. Herhalingen komen altijd.", cx).child(
-                h_flex()
-                    .gap_2()
-                    .child(Button::new("fewer").outline().small().label("−").on_click(cx.listener(|this, _, _, cx| this.change_new_per_day(-1, cx))))
-                    .child(div().w(px(40.)).text_center().text_lg().child(self.settings.new_per_day.to_string()))
-                    .child(Button::new("more").outline().small().label("+").on_click(cx.listener(|this, _, _, cx| this.change_new_per_day(1, cx)))),
-            ))
-            .child(section("Gegevens", format!("Je kaarten en geluid staan in {}", self.paths.root().display()), cx))
     }
 
     /// Man or woman, then the voices of that gender to try and choose.
     fn render_voices(&self, cx: &mut Context<Self>) -> Div {
         let gender = self.settings.gender;
-        let genders = h_flex().gap_1().children([Gender::Male, Gender::Female].map(|g| {
-            Button::new(g.as_str()).outline().label(g.label()).selected(gender == g).on_click(cx.listener(move |this, _, _, cx| this.set_gender(g, cx)))
-        }));
+        let genders = h_flex().child(segmented_bar(cx).children([Gender::Male, Gender::Female].map(|g| {
+            segment_button(g.as_str(), g.label(), gender == g, cx).on_click(cx.listener(move |this, _, _, cx| this.set_gender(g, cx)))
+        })));
         let missing = voice::VOICES.iter().any(|v| !self.sound.speaker.is_installed(v));
         section("Stem", "Kies een mannen- of vrouwenstem. Pim, Ronnie en Alex spreken Nederlands uit Nederland, Nathalie spreekt Vlaams.", cx)
             .child(genders)
-            .child(v_flex().gap_1().children(voice::voices_for(gender).map(|option| self.render_voice(option, cx)).collect::<Vec<_>>()))
+            .child(v_flex().gap_1p5().children(voice::voices_for(gender).map(|option| self.render_voice(option, cx)).collect::<Vec<_>>()))
             .when(missing, |d| d.child(hint("Ontbrekende stemmen installeer je met scripts/fetch-models.sh.", cx)))
     }
 
@@ -108,33 +124,57 @@ impl FlashcardsApp {
         let installed = self.sound.speaker.is_installed(option);
         let chosen = option.id == self.settings.voice_id();
         let (note, note_color) = if installed { (option.note, theme.muted_foreground) } else { ("Niet geïnstalleerd", theme.danger) };
-        let (border, background, pick) = if chosen { (theme.primary, theme.accent, "Gekozen") } else { (theme.border, theme.background, "Kies") };
-        h_flex()
+        let (border, background) = if chosen { (theme.primary, theme.accent) } else { (theme.border, surface(cx)) };
+        let radio = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(16.))
+            .rounded_full()
+            .border_1()
+            .border_color(if chosen { theme.primary } else { theme.border })
+            .when(chosen, |d| d.child(div().size(px(8.)).rounded_full().bg(theme.primary)));
+
+        let select_area = h_flex()
+            .id(SharedString::from(format!("pick-{}", option.id)))
+            .flex_1()
+            .min_w_0()
             .gap_3()
-            .px_3()
             .py_2()
-            .rounded(px(6.))
+            .pl_3()
+            .items_center()
+            .when(installed, |d| {
+                d.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| this.choose_voice(option, cx)))
+            })
+            .child(radio)
+            .child(
+                div()
+                    .font_weight(if chosen { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
+                    .text_color(if chosen { theme.accent_foreground } else { theme.foreground })
+                    .child(option.label),
+            )
+            .when(!note.is_empty(), |d| d.child(div().text_sm().text_color(note_color).child(note)));
+
+        h_flex()
+            .gap_2()
+            .pr_2()
+            .items_center()
+            .rounded(px(8.))
             .border_1()
             .border_color(border)
             .bg(background)
-            .child(div().w(px(110.)).font_weight(FontWeight::MEDIUM).child(option.label))
-            .child(div().flex_1().text_sm().text_color(note_color).child(note))
+            .when(!installed, |d| d.opacity(0.6))
+            .when(installed && !chosen, |d| d.hover(move |s| s.bg(theme.muted)))
+            .child(select_area)
             .child(
                 Button::new(SharedString::from(format!("try-{}", option.id)))
                     .ghost()
                     .small()
+                    .icon(icons::listen())
                     .label("Probeer")
                     .disabled(!installed)
                     .on_click(cx.listener(move |this, _, _, cx| this.speak(SAMPLE.into(), option, Speed::Normal, cx))),
-            )
-            .child(
-                Button::new(SharedString::from(format!("pick-{}", option.id)))
-                    .small()
-                    .outline()
-                    .selected(chosen)
-                    .disabled(!installed)
-                    .label(pick)
-                    .on_click(cx.listener(move |this, _, _, cx| this.choose_voice(option, cx))),
             )
     }
 }

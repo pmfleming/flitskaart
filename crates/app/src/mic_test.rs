@@ -1,6 +1,5 @@
-//! Instellingen → Microfoon: which microphone the sound comes from, and a test
-//! that records a few words, says how loud they came in, plays back exactly
-//! what the computer heard and, when Whisper is installed, what it understood.
+//! Instellingen → Microfoon & uitspraak: Whisper status, which microphone
+//! the sound comes from, input boost and a test recording.
 
 use std::path::PathBuf;
 
@@ -8,17 +7,17 @@ use anyhow::Result;
 use dutch_flashcards_core::inputs::Inputs;
 use dutch_flashcards_core::speech::write_wav_16k;
 use dutch_flashcards_core::store::{INPUT_BOOSTS, boost_label, snap_input_boost};
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Colorize as _, Disableable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::{AnyElement, App, AppContext as _, Context, Div, Entity, Subscription, FontWeight, IntoElement, ParentElement as _, SharedString, Styled as _, div, px};
+use gpui_kit::{AnyElement, App, AppContext as _, Context, Div, Entity, FontWeight, IntoElement, ParentElement as _, SharedString, Styled as _, Subscription, div, px};
 
 use crate::app::FlashcardsApp;
 use crate::capture::Capture;
 use crate::icons;
 use crate::recorder::{Captured, Loudness};
-use crate::ui::{heading, hint};
+use crate::ui::{card_box, heading, hint};
 
 /// A sentence to say during the test.
 const TEST_SENTENCE: &str = "Goedemorgen, hoe gaat het met je?";
@@ -97,7 +96,7 @@ impl MicTest {
         }
         match self.result.as_ref().and_then(|result| result.device.as_deref()) {
             Some(device) => format!("Geluid komt van: {device}"),
-            None => "Het systeem zegt niet welke microfoon wordt gebruikt. De app neemt op met de standaardmicrofoon van je systeem.".into(),
+            None => "De app neemt op met de standaardmicrofoon van je systeem.".into(),
         }
     }
 }
@@ -175,9 +174,27 @@ impl FlashcardsApp {
     }
 
     pub fn render_mic_test(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
         let test = &self.mic_test;
         let recording = test.capture.is_on();
-        let test_button = Button::new("mic-test")
+        let whisper_ready = self.listener.is_installed();
+        let whisper_badge = h_flex()
+            .items_center()
+            .gap_1p5()
+            .px_2p5()
+            .py(px(3.))
+            .rounded_full()
+            .bg(if whisper_ready { theme.success.opacity(0.14) } else { theme.danger.opacity(0.14) })
+            .child(div().size(px(7.)).rounded_full().bg(if whisper_ready { theme.success } else { theme.danger }))
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(if whisper_ready { theme.success } else { theme.danger })
+                    .child(if whisper_ready { "Whisper geïnstalleerd" } else { "Whisper ontbreekt" }),
+            );
+
+        let mut test_button = Button::new("mic-test")
             .outline()
             .icon(icons::speak())
             .label(test.button_label())
@@ -185,6 +202,9 @@ impl FlashcardsApp {
             .on_click(cx.listener(move |this, _, _, cx| {
                 if recording { this.mic_test.capture.stop() } else { this.start_mic_test(cx) }
             }));
+        if recording {
+            test_button = test_button.danger();
+        }
         let play_button = Button::new("mic-test-play")
             .outline()
             .icon(icons::listen())
@@ -196,31 +216,63 @@ impl FlashcardsApp {
             None => test.result.as_ref().map(|result| self.render_mic_result(result, cx)),
         };
         let explanation = format!("Neem een paar woorden op en luister terug wat de computer hoorde. Zeg bijvoorbeeld: “{TEST_SENTENCE}”");
-        v_flex()
-            .gap_3()
-            .max_w(px(640.))
-            .child(heading("Microfoon"))
+
+        card_box(cx)
+            .p_4()
+            .gap_3p5()
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(h_flex().justify_between().items_center().flex_wrap().gap_2().child(heading("Microfoon & uitspraak")).child(whisper_badge))
+                    .child(hint(
+                        "Whisper luistert op deze laptop en geeft je uitspraak in Oefenen een cijfer van 1 tot 4.",
+                        cx,
+                    ))
+                    .when(!whisper_ready, |d| {
+                        d.child(hint("Installeer spraakherkenning met scripts/fetch-models.sh.", cx).text_color(theme.danger))
+                    }),
+            )
             .child(self.render_inputs(cx))
             .child(self.render_boost(cx))
-            .child(hint(explanation, cx))
-            .child(h_flex().gap_2().flex_wrap().child(test_button).child(play_button))
-            .children(status)
-            .children(test.error.clone().map(|text| hint(text, cx).text_color(cx.theme().danger)))
+            .child(
+                v_flex()
+                    .gap_2p5()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .child(hint(explanation, cx))
+                    .child(h_flex().gap_2().flex_wrap().child(test_button).child(play_button))
+                    .children(status)
+                    .children(test.error.clone().map(|text| hint(text, cx).text_color(theme.danger))),
+            )
     }
 
-    /// The input boost: a slider over the offered steps, with the steps marked below it.
+    /// The input boost: a slider over the offered steps, with equal-width tick labels aligned under each stop.
     fn render_boost(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let current = self.settings.input_boost;
+        let ticks = h_flex().w(px(360. + 28.)).ml(px(-14.)).justify_between().children(INPUT_BOOSTS.map(|boost| {
+            let active = (boost - current).abs() < 0.01;
+            div()
+                .w(px(40.))
+                .text_center()
+                .text_xs()
+                .font_weight(if active { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                .text_color(if active { theme.primary } else { theme.muted_foreground })
+                .child(boost_label(boost))
+        }));
         let slider = v_flex()
             .gap_1p5()
-            .max_w(px(360.))
+            .w(px(360.))
             .child(
                 h_flex()
                     .justify_between()
+                    .items_center()
                     .child(div().font_weight(FontWeight::MEDIUM).child("Versterking"))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(boost_label(self.settings.input_boost))),
+                    .child(div().font_weight(FontWeight::SEMIBOLD).text_color(theme.primary).child(boost_label(current))),
             )
             .child(Slider::new(&self.mic_test.boost_slider).disabled(self.mic_test.capture.is_on()))
-            .child(h_flex().justify_between().children(INPUT_BOOSTS.map(|boost| hint(boost_label(boost), cx))));
+            .child(ticks);
         v_flex()
             .gap_1p5()
             .child(slider)
@@ -243,7 +295,7 @@ impl FlashcardsApp {
             None => h_flex().child(hint("Er is geen standaardmicrofoon gekozen in je systeeminstellingen.", cx).text_color(theme.danger)),
         };
         let others: Vec<String> = inputs.others().map(|input| format!("{} ({})", input.label, input.describe())).collect();
-        box_with_border(if muted { theme.danger } else { theme.border })
+        sub_box(if muted { theme.danger } else { theme.border }, theme.muted)
             .gap_1()
             .child(source)
             .when(muted, |d| d.child(hint("Deze microfoon staat gedempt. Zet hem aan in je systeeminstellingen.", cx).text_color(theme.danger)))
@@ -263,7 +315,7 @@ impl FlashcardsApp {
             Loudness::Quiet | Loudness::Clipped => theme.warning,
             Loudness::Silent => theme.danger,
         };
-        box_with_border(theme.border)
+        sub_box(color.opacity(0.45), color.opacity(0.08))
             .gap_2()
             .child(
                 h_flex()
@@ -277,7 +329,7 @@ impl FlashcardsApp {
     }
 }
 
-/// A padded, rounded box with a coloured border.
-fn box_with_border(color: gpui_kit::Hsla) -> Div {
-    v_flex().p_3().rounded(px(6.)).border_1().border_color(color)
+/// A padded, rounded inset box inside a settings card.
+fn sub_box(border: gpui_kit::Hsla, bg: gpui_kit::Hsla) -> Div {
+    v_flex().p_3().rounded(px(8.)).border_1().border_color(border).bg(bg)
 }

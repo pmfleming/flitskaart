@@ -12,6 +12,7 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_fl
 use gpui_kit::{AnyElement, App, Context, FontWeight, Hsla, IntoElement, ParentElement as _, Styled as _, div, px};
 
 use crate::app::FlashcardsApp;
+use crate::icons;
 use crate::recorder::Captured;
 use crate::study::Attempt;
 use crate::ui::{hint, keycap};
@@ -92,7 +93,14 @@ impl FlashcardsApp {
     pub fn render_reading_status(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let attempt = &self.study.attempt;
         let body = if let Some(meter) = attempt.capture.render("Lees de kaart hardop.", cx) {
-            Some(meter.into_any_element())
+            Some(
+                v_flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(meter)
+                    .child(h_flex().items_center().gap_1p5().child(keycap("Esc", cx)).child(hint("annuleren", cx)))
+                    .into_any_element(),
+            )
         } else if attempt.judging {
             Some(hint("Even luisteren…", cx).into_any_element())
         } else if let Some(result) = &attempt.speech {
@@ -110,15 +118,18 @@ impl FlashcardsApp {
     fn render_speech_result(&self, result: &Assessment, cx: &mut Context<Self>) -> AnyElement {
         let chip = div()
             .px_2()
-            .rounded(px(4.))
+            .py(px(1.))
+            .rounded(px(5.))
             .bg(grade_color(result.grade, cx))
-            .text_color(cx.theme().background)
+            .text_color(cx.theme().primary_foreground)
+            .text_sm()
             .font_weight(FontWeight::SEMIBOLD)
             .child(result.grade.number().to_string());
         let own_recording = Button::new("own-recording")
             .ghost()
             .small()
             .tab_stop(false)
+            .icon(icons::listen())
             .disabled(!self.study.attempt.has_recording)
             .child(h_flex().gap_1p5().child("Mijn opname").child(keycap("O", cx)))
             .on_click(cx.listener(|this, _, window, cx| {
@@ -141,7 +152,7 @@ impl FlashcardsApp {
                     .child(hint(format!("{:.0}% verstaan", result.accuracy * 100.0), cx))
                     .child(own_recording),
             )
-            .child(hint(heard, cx))
+            .child(hint(heard, cx).text_center())
             .into_any_element()
     }
 }

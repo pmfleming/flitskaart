@@ -1,18 +1,19 @@
-//! The window: a tab strip over five screens, sharing one deck.
+//! The window: a tab strip over six screens, sharing one deck.
 
 use std::time::Duration;
 
 use dutch_flashcards_core::Store;
+use dutch_flashcards_core::claude::Claude;
 use dutch_flashcards_core::paths::Paths;
 use dutch_flashcards_core::speech::Listener;
 use dutch_flashcards_core::store::{Appearance, Settings};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::theme::{Theme, ThemeMode};
-use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Colorize as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    Context, IntoElement, ParentElement as _, Render, ScrollHandle, SharedString, Styled as _,
-    Subscription, Window, div,
+    Context, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, ScrollHandle, SharedString,
+    Styled as _, Subscription, Window, div, px,
 };
 
 use crate::add::AddState;
@@ -21,10 +22,13 @@ use crate::deck::DeckState;
 use crate::drafts::DraftRow;
 use crate::mic_test::MicTest;
 use crate::study::StudyState;
+use crate::talk::TalkState;
+use crate::ui::{apply_palette, surface};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
     Study,
+    Talk,
     Add,
     Drafts,
     Deck,
@@ -32,8 +36,8 @@ pub enum Screen {
 }
 
 impl Screen {
-    pub const ALL: [Screen; 5] = [Screen::Study, Screen::Add, Screen::Drafts, Screen::Deck, Screen::Settings];
-    const LABELS: [&str; 5] = ["Oefenen", "Toevoegen", "Concepten", "Kaarten", "Instellingen"];
+    pub const ALL: [Screen; 6] = [Screen::Study, Screen::Talk, Screen::Add, Screen::Drafts, Screen::Deck, Screen::Settings];
+    const LABELS: [&str; 6] = ["Oefenen", "Gesprek", "Toevoegen", "Concepten", "Kaarten", "Instellingen"];
 
     pub fn label(self) -> &'static str {
         Screen::LABELS[self as usize]
@@ -54,6 +58,8 @@ pub struct Notice {
 pub struct FlashcardsApp {
     pub store: Store,
     pub listener: Listener,
+    /// Claude Code, for drafting cards and for conversations.
+    pub claude: Claude,
     /// A WAV file used in place of the microphone (`--recording`), for checks.
     pub fake_recording: Option<std::path::PathBuf>,
     pub settings: Settings,
@@ -61,6 +67,7 @@ pub struct FlashcardsApp {
     pub sound: Sound,
     pub screen: Screen,
     pub study: StudyState,
+    pub talk: TalkState,
     pub mic_test: MicTest,
     /// Instellingen scrolls; the microphone test brings its result into view.
     pub settings_scroll: ScrollHandle,
@@ -68,6 +75,7 @@ pub struct FlashcardsApp {
     pub drafts: Vec<DraftRow>,
     pub deck: DeckState,
     pub notice: Option<Notice>,
+    notice_ticket: u64,
     _appearance_changed: Subscription,
 }
 
@@ -78,13 +86,16 @@ impl FlashcardsApp {
         let appearance_changed = cx.observe_window_appearance(window, |this, window, cx| {
             if this.settings.appearance == Appearance::System {
                 Theme::sync_system_appearance(Some(window), cx);
+                apply_palette(cx);
             }
         });
         let mut app = FlashcardsApp {
             sound: Sound::new(&paths),
             listener: Listener::new(&paths),
+            claude: Claude::from_env(),
             fake_recording: None,
             study: StudyState::new(settings.mode, cx),
+            talk: TalkState::new(window, cx),
             mic_test: MicTest::new(settings.input_boost, cx),
             settings_scroll: ScrollHandle::new(),
             add: AddState::new(window, cx),
@@ -95,6 +106,7 @@ impl FlashcardsApp {
             paths,
             screen: Screen::Study,
             notice: None,
+            notice_ticket: 0,
             _appearance_changed: appearance_changed,
         };
         app.apply_appearance(window, cx);
@@ -108,6 +120,7 @@ impl FlashcardsApp {
     pub fn show(&mut self, screen: Screen, window: &mut Window, cx: &mut Context<Self>) {
         self.screen = screen;
         self.notice = None;
+        self.notice_ticket += 1;
         match screen {
             Screen::Study if self.study.card.is_none() => self.load_next_card(cx),
             Screen::Deck => self.reload_deck(),
@@ -117,6 +130,7 @@ impl FlashcardsApp {
         match screen {
             Screen::Study => self.study.focus.focus(window, cx),
             Screen::Add => self.add.focus(window, cx),
+            Screen::Talk => self.talk.focus(window, cx),
             _ => {}
         }
         cx.notify();
@@ -125,25 +139,35 @@ impl FlashcardsApp {
     /// Shows an error across the bottom of the window, and logs it.
     pub fn error(&mut self, text: impl std::fmt::Display) {
         let text = crate::logging::error(self.screen.label(), text);
+        self.notice_ticket += 1;
         self.notice = Some(Notice { text: text.into(), is_error: true });
     }
 
-    pub fn info(&mut self, text: impl Into<SharedString>) {
+    /// Shows a brief confirmation notice that clears itself after a few seconds.
+    pub fn info(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.notice_ticket += 1;
+        let ticket = self.notice_ticket;
         self.notice = Some(Notice { text: text.into(), is_error: false });
+        self.after(Duration::from_secs(4), cx, move |this, _| {
+            if this.notice_ticket == ticket {
+                this.notice = None;
+            }
+        });
     }
 
-    /// Whether a recording or Whisper is busy, in Oefenen or the microphone test.
+    /// Whether a recording, Whisper or Claude is busy, in Oefenen, Gesprek or the microphone test.
     pub fn busy(&self) -> bool {
-        self.busy_listening() || self.mic_test.is_busy()
+        self.busy_listening() || self.talk.busy() || self.mic_test.is_busy()
     }
 
-    /// Applies the light/dark setting to the window.
+    /// Applies the light/dark setting and the app's palette to the window.
     pub fn apply_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.settings.appearance {
             Appearance::System => Theme::sync_system_appearance(Some(window), cx),
             Appearance::Light => Theme::change(ThemeMode::Light, Some(window), cx),
             Appearance::Dark => Theme::change(ThemeMode::Dark, Some(window), cx),
         }
+        apply_palette(cx);
     }
 
     pub fn save_settings(&mut self) {
@@ -187,9 +211,26 @@ impl FlashcardsApp {
         chrono::Utc::now()
     }
 
+    /// Global shortcuts: Ctrl+1..6 (or Alt+1..6) switches directly to a screen.
+    fn on_global_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let m = &event.keystroke.modifiers;
+        let nav_mod = (m.control || m.alt || m.platform) && !m.shift && !event.is_held;
+        if !nav_mod {
+            return;
+        }
+        if let Ok(n) = event.keystroke.key.parse::<usize>()
+            && let Some(&screen) = n.checked_sub(1).and_then(|i| Screen::ALL.get(i))
+        {
+            self.show(screen, window, cx);
+            cx.stop_propagation();
+        }
+    }
+
     fn render_tabs(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = Screen::ALL.iter().position(|s| *s == self.screen).unwrap_or(0);
         let drafts = self.drafts.len();
+        let waiting = self.study.counts.due + self.study.counts.new;
+        let on_study = self.screen == Screen::Study;
         let theme = cx.theme().clone();
         TabBar::new("screens")
             .underline()
@@ -197,29 +238,54 @@ impl FlashcardsApp {
             .on_click(cx.listener(|this, index: &usize, window, cx| this.show(Screen::ALL[*index], window, cx)))
             .children(Screen::ALL.map(|screen| {
                 let tab = Tab::new().label(screen.label());
-                if screen != Screen::Drafts || drafts == 0 {
-                    return tab;
+                match screen {
+                    Screen::Drafts if drafts > 0 => {
+                        let (bg, fg) = if on_study {
+                            (theme.secondary, theme.muted_foreground)
+                        } else {
+                            (theme.accent, theme.accent_foreground)
+                        };
+                        let badge = div().ml_1p5().px_1p5().rounded_full().bg(bg).text_color(fg).text_xs().child(drafts.to_string());
+                        tab.suffix(badge)
+                    }
+                    Screen::Study if !on_study && waiting > 0 => {
+                        let badge = div()
+                            .ml_1p5()
+                            .px_1p5()
+                            .rounded_full()
+                            .bg(theme.secondary)
+                            .text_color(theme.muted_foreground)
+                            .text_xs()
+                            .child(waiting.to_string());
+                        tab.suffix(badge)
+                    }
+                    _ => tab,
                 }
-                let badge = div().ml_1().px_1p5().rounded_full().bg(theme.primary).text_color(theme.primary_foreground);
-                tab.suffix(badge.text_xs().child(drafts.to_string()))
             }))
     }
 
     fn render_notice(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let notice = self.notice.as_ref()?;
         let theme = cx.theme();
-        let color = if notice.is_error { theme.danger } else { theme.foreground };
+        let (bg, border, dot, text) = if notice.is_error {
+            (theme.danger.opacity(0.10), theme.danger.opacity(0.35), theme.danger, theme.danger)
+        } else {
+            (surface(cx), theme.border, theme.primary, theme.foreground)
+        };
         Some(
             h_flex()
                 .px_4()
                 .py_2()
-                .gap_3()
+                .gap_2p5()
+                .items_center()
                 .border_t_1()
-                .border_color(theme.border)
-                .bg(theme.secondary)
-                .child(div().flex_1().text_sm().text_color(color).child(notice.text.clone()))
+                .border_color(border)
+                .bg(bg)
+                .child(div().flex_none().size(px(8.)).rounded_full().bg(dot))
+                .child(div().flex_1().text_sm().text_color(text).child(notice.text.clone()))
                 .child(Button::new("dismiss-notice").label("Sluiten").small().ghost().on_click(cx.listener(|this, _, _, cx| {
                     this.notice = None;
+                    this.notice_ticket += 1;
                     cx.notify();
                 }))),
         )
@@ -227,12 +293,13 @@ impl FlashcardsApp {
 }
 
 impl Render for FlashcardsApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = match self.screen {
             Screen::Study => self.render_study(cx).into_any_element(),
+            Screen::Talk => self.render_talk(cx).into_any_element(),
             Screen::Add => self.render_add(cx).into_any_element(),
             Screen::Drafts => self.render_drafts(cx).into_any_element(),
-            Screen::Deck => self.render_deck(cx).into_any_element(),
+            Screen::Deck => self.render_deck(window, cx).into_any_element(),
             Screen::Settings => self.render_settings(cx).into_any_element(),
         };
         let theme = cx.theme();
@@ -240,7 +307,8 @@ impl Render for FlashcardsApp {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(div().px_3().bg(theme.tab_bar).border_b_1().border_color(theme.border).child(self.render_tabs(cx)))
+            .on_key_down(cx.listener(Self::on_global_key))
+            .child(div().px_4().bg(theme.tab_bar).border_b_1().border_color(theme.border).child(self.render_tabs(cx)))
             .child(div().flex_1().min_h_0().child(body))
             .children(self.render_notice(cx))
     }

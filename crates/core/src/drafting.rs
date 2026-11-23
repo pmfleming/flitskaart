@@ -1,11 +1,9 @@
 //! Turns a pasted piece of conversation into draft cards, using Claude Code
 //! on this laptop (the Claude subscription, no API key).
 
-use std::io::Write as _;
-use std::process::{Command, Stdio};
-
 use anyhow::{Context as _, Result, bail};
 
+use crate::claude::Claude;
 use crate::model::NewCard;
 
 pub const DEFAULT_LIMIT: usize = 6;
@@ -95,46 +93,16 @@ fn request_text(snippet: &str, steer: &str, limit: usize) -> String {
 
 /// Asks Claude Code for draft cards. Blocks for several seconds, so call it off
 /// the UI thread.
-pub fn draft_cards(snippet: &str, steer: &str, limit: usize) -> Result<Vec<NewCard>> {
+pub fn draft_cards(claude: &Claude, snippet: &str, steer: &str, limit: usize) -> Result<Vec<NewCard>> {
     if snippet.trim().is_empty() {
         bail!("Plak eerst een stuk van een gesprek.");
     }
-    let claude = crate::paths::program("DUTCH_FLASHCARDS_CLAUDE", "claude");
-    let model = std::env::var("DUTCH_FLASHCARDS_MODEL").unwrap_or_else(|_| "sonnet".into());
-    // Run outside any project so no project instructions are picked up.
-    let workdir = std::env::temp_dir();
-    let mut child = Command::new(&claude)
-        .current_dir(&workdir)
-        .args(["-p", "--model", &model, "--output-format", "json", "--json-schema", SCHEMA])
-        .args(["--system-prompt", INSTRUCTIONS])
-        .args(["--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("Claude Code ({}) kon niet starten. Is het geïnstalleerd en ben je ingelogd?", claude.display()))?;
-    child.stdin.take().context("Claude Code nam geen tekst aan")?.write_all(request_text(snippet, steer, limit).as_bytes())?;
-    let output = child.wait_with_output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if !output.status.success() && stdout.trim().is_empty() {
-        bail!("Claude Code gaf een fout: {}", crate::voice::last_line(&output.stderr));
-    }
-    parse_reply(&stdout, limit)
+    cards_from(claude.ask(INSTRUCTIONS, SCHEMA, &request_text(snippet, steer, limit))?, limit)
 }
 
-/// Reads Claude Code's `--output-format json` envelope.
-fn parse_reply(stdout: &str, limit: usize) -> Result<Vec<NewCard>> {
-    let mut envelope: serde_json::Value =
-        serde_json::from_str(stdout.trim()).context("Claude Code gaf geen leesbaar antwoord")?;
-    // Older Claude Code versions put the cards in the result text instead.
-    let structured = envelope["structured_output"].take();
-    let result = envelope["result"].as_str().unwrap_or_default();
-    if envelope["is_error"].as_bool() == Some(true) {
-        bail!("Claude Code gaf een fout: {}", if result.is_empty() { "onbekende fout" } else { result });
-    }
-    let structured =
-        if structured.is_null() { serde_json::from_str(result).context("Claude Code gaf geen kaarten terug")? } else { structured };
-    let reply: Reply = serde_json::from_value(structured).context("Claude Code gaf kaarten in een onverwachte vorm")?;
+/// The usable cards in Claude's answer: no blanks or repeats, at most `limit`.
+fn cards_from(answer: serde_json::Value, limit: usize) -> Result<Vec<NewCard>> {
+    let reply: Reply = serde_json::from_value(answer).context("Claude Code gaf kaarten in een onverwachte vorm")?;
     let mut seen = std::collections::HashSet::new();
     Ok(reply
         .cards
@@ -147,7 +115,12 @@ fn parse_reply(stdout: &str, limit: usize) -> Result<Vec<NewCard>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_manual, parse_reply, request_text};
+    use super::{NewCard, cards_from, parse_manual, request_text};
+    use crate::claude::answer;
+
+    fn parse_reply(stdout: &str, limit: usize) -> anyhow::Result<Vec<NewCard>> {
+        cards_from(answer(stdout)?, limit)
+    }
 
     #[test]
     fn manual_lines_become_cards() {

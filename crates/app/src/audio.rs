@@ -90,7 +90,7 @@ impl FlashcardsApp {
     /// Plays a recording, saying `what` it is.
     pub fn play_file(&mut self, path: &Path, what: &'static str, cx: &mut Context<Self>) {
         match self.sound.output.play(path) {
-            Ok(_) => self.info(what),
+            Ok(_) => self.info(what, cx),
             Err(err) => self.error(format!("{err:#}")),
         }
         cx.notify();

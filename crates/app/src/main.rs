@@ -13,6 +13,7 @@ mod recorder;
 mod settings;
 mod speaking;
 mod study;
+mod talk;
 #[cfg(test)]
 mod tests;
 mod ui;
@@ -29,7 +30,7 @@ use gpui_kit::{
 use crate::app::{FlashcardsApp, Screen};
 
 /// Developer flags for screenshots and checks:
-/// `--screen <oefenen|toevoegen|concepten|kaarten|instellingen>` opens that screen,
+/// `--screen <oefenen|gesprek|toevoegen|concepten|kaarten|instellingen>` opens that screen,
 /// `--keys "space 3"` replays study shortcuts after start-up,
 /// `--appearance <systeem|licht|donker>` overrides the colours for this run only,
 /// `--recording <file.wav>` uses a WAV file instead of the microphone.
@@ -112,13 +113,16 @@ impl FlashcardsApp {
     }
 
     /// Replays study keys; on Instellingen, `microfoon` runs the microphone
-    /// test. `wacht` waits until recording and listening are done.
+    /// test; on Gesprek, `begin` starts a conversation and `spreek` answers
+    /// by voice. `wacht` waits until recording, listening and Claude are done.
     fn replay_keys(&mut self, mut keys: VecDeque<String>, window: &mut Window, cx: &mut Context<Self>) {
         while let Some(key) = keys.pop_front() {
             match (self.screen, key.as_str()) {
                 (_, "wacht") => return self.replay_when_idle(keys, window, cx),
                 (Screen::Study, key) => _ = self.study_key(key, window, cx),
                 (Screen::Settings, "microfoon") => self.start_mic_test(cx),
+                (Screen::Talk, "begin") => self.start_conversation(window, cx),
+                (Screen::Talk, "spreek") => self.speak_answer(cx),
                 _ => {}
             }
         }

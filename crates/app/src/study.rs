@@ -7,7 +7,7 @@ use dutch_flashcards_core::store::{Counts, Mode, Review};
 use dutch_flashcards_core::voice::Speed;
 use dutch_flashcards_core::{Card, Grade};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Colorize as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, Context, FocusHandle, FontWeight, HighlightStyle, InteractiveElement as _, IntoElement, KeyDownEvent,
@@ -19,7 +19,7 @@ use crate::app::{FlashcardsApp, Screen};
 use crate::capture::Capture;
 use crate::icons;
 use crate::speaking::grade_color;
-use crate::ui::{empty_state, hint, keycap};
+use crate::ui::{card_box, empty_state, hint, keycap, keycap_primary, pill, segment_button, segmented_bar, surface};
 
 pub struct StudyState {
     pub focus: FocusHandle,
@@ -248,24 +248,31 @@ impl FlashcardsApp {
         let modes = [(Mode::Read, "Lezen"), (Mode::Listen, "Luisteren")];
         let Counts { due, new } = self.study.counts;
         let has_card = self.study.card.is_some();
-        let summary = if has_card || due + new > 0 { format!("{due} te herhalen · {new} nieuw") } else { String::new() };
+        let mut parts = Vec::new();
+        if has_card || due + new > 0 {
+            parts.push(format!("{due} te herhalen · {new} nieuw"));
+        }
+        if self.study.reviewed_today > 0 {
+            parts.push(format!("{} gedaan", self.study.reviewed_today));
+        }
+        let summary = parts.join(" · ");
         h_flex()
+            .w_full()
+            .max_w(px(760.))
+            .mx_auto()
             .justify_between()
+            .items_center()
             .flex_wrap()
             .gap_3()
-            .child(h_flex().gap_1().children(modes.map(|(mode, label)| {
-                Button::new(SharedString::from(format!("mode-{label}")))
-                    .label(label)
-                    .small()
-                    .outline()
+            .child(segmented_bar(cx).children(modes.map(|(mode, label)| {
+                segment_button(SharedString::from(format!("mode-{label}")), label, self.study.mode == mode, cx)
                     .tab_stop(false)
-                    .selected(self.study.mode == mode)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.set_mode(mode, cx);
                         this.study.focus.focus(window, cx);
                     }))
             })))
-            .child(h_flex().gap_3().child(hint(summary, cx)).when(has_card, |d| {
+            .child(h_flex().items_center().gap_3().child(hint(summary, cx)).when(has_card, |d| {
                 d.child(
                     Button::new("edit")
                         .ghost()
@@ -278,35 +285,70 @@ impl FlashcardsApp {
     }
 
     fn render_card(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let sound = match (self.sound.preparing, self.sound.playing) {
-            (true, _) => "stem wordt gemaakt…",
-            (_, true) => "speelt af",
-            _ => "",
-        };
         let reading = if self.study.mode == Mode::Read { self.render_reading_status(cx) } else { None };
+        let meaning = self.render_meaning(cx);
         let bottom = if self.study.scoring_open() {
             self.render_scores(cx).into_any_element()
         } else {
             Button::new("reveal")
                 .primary()
                 .tab_stop(false)
-                .child(h_flex().gap_2().child("Toon tekst").child(keycap("Spatie", cx)))
+                .child(h_flex().gap_2().child("Toon tekst").child(keycap_primary("Spatie", cx)))
                 .on_click(self.study_click(Self::advance, cx))
                 .into_any_element()
         };
+
+        // Fixed-minimum feedback area keeps the Dutch phrase and controls anchored
+        // when opening the meaning or starting a recording.
+        let feedback = v_flex()
+            .w_full()
+            .min_h(px(64.))
+            .items_center()
+            .justify_center()
+            .gap_2p5()
+            .children(reading)
+            .children(meaning);
+
+        let stage = card_box(cx)
+            .w_full()
+            .max_w(px(680.))
+            .min_h(px(250.))
+            .px_8()
+            .py_6()
+            .gap_4()
+            .items_center()
+            .justify_between()
+            .child(self.render_card_meta(cx))
+            .child(v_flex().flex_1().w_full().items_center().justify_center().children(self.render_phrase(cx)))
+            .child(feedback);
+
         v_flex()
             .flex_1()
             .min_h_0()
+            .w_full()
             .items_center()
             .justify_center()
-            .gap_4()
-            .children(self.render_phrase(cx))
-            .child(div().h_4().text_xs().text_color(theme.primary).child(sound))
-            .children(reading)
-            .children(self.render_meaning(cx))
+            .gap_5()
+            .child(stage)
             .child(self.render_tools(cx))
             .child(bottom)
+    }
+
+    /// Quiet topic pill and new-card indicator at the top of the card.
+    fn render_card_meta(&self, cx: &App) -> impl IntoElement {
+        let theme = cx.theme();
+        let Some(card) = self.study.card.as_ref() else {
+            return h_flex().h(px(22.));
+        };
+        let has_tag = !card.tags.trim().is_empty();
+        h_flex()
+            .w_full()
+            .min_h(px(22.))
+            .justify_between()
+            .items_center()
+            .gap_2()
+            .child(div().when(has_tag, |d| d.child(pill(card.tags.clone(), theme.secondary, theme.muted_foreground))))
+            .child(div().when(card.is_new(), |d| d.child(pill("Nieuw", theme.accent, theme.accent_foreground))))
     }
 
     /// The Dutch, with the words the app missed underlined; dots while veiled.
@@ -326,10 +368,10 @@ impl FlashcardsApp {
         let text: SharedString = if veiled { "• • •".into() } else { card.dutch.clone().into() };
         Some(
             div()
-                .max_w(px(720.))
+                .max_w(px(620.))
                 .text_center()
-                .text_size(px(34.))
-                .line_height(relative(1.25))
+                .text_size(px(32.))
+                .line_height(relative(1.3))
                 .font_weight(FontWeight::MEDIUM)
                 .when(veiled, |d| d.text_color(theme.muted_foreground))
                 .child(StyledText::new(text).with_highlights(highlights)),
@@ -337,77 +379,100 @@ impl FlashcardsApp {
     }
 
     /// The English and the note, once the learner opens them.
-    fn render_meaning(&self, cx: &App) -> Option<impl IntoElement> {
+    fn render_meaning(&self, cx: &App) -> Option<gpui_kit::Div> {
         let card = self.study.card.as_ref().filter(|_| self.study.attempt.english_shown)?;
         let theme = cx.theme();
         let english = if card.english.is_empty() { "(geen vertaling)".to_string() } else { card.english.clone() };
         Some(
             v_flex()
+                .w_full()
                 .items_center()
                 .gap_1()
-                .max_w(px(560.))
-                .pt_2()
+                .max_w(px(540.))
+                .pt_2p5()
                 .border_t_1()
                 .border_color(theme.border)
                 .text_center()
-                .child(div().italic().text_color(theme.muted_foreground).child(english))
+                .child(div().italic().text_color(theme.foreground).child(english))
                 .when(!card.note.is_empty(), |d| d.child(hint(card.note.clone(), cx))),
         )
     }
 
-    /// Test mijn uitspraak, Hoor de zin and Betekenis.
+    /// Test mijn uitspraak, Hoor de zin (+ Langzaam) and Betekenis.
     fn render_tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let attempt = &self.study.attempt;
+        let recording = attempt.capture.is_on();
+        let audio_active = self.sound.playing || self.sound.preparing;
+        let hear_label = if self.sound.preparing { "Even wachten…" } else { "Hoor de zin" };
+
         let tool = |id: &'static str, icon: Icon, label: &str, key: &str, cx: &App| {
             Button::new(id).outline().tab_stop(false).icon(icon).child(h_flex().gap_2().child(label.to_string()).child(keycap(key, cx)))
         };
         let test = (self.study.mode == Mode::Read).then(|| {
-            tool("test-reading", icons::speak(), attempt.test_label(), "Spatie", cx)
+            let mut btn = tool("test-reading", icons::speak(), attempt.test_label(), "Spatie", cx)
                 .disabled(!self.listener.is_installed() || attempt.judging)
-                .on_click(self.study_click(Self::advance, cx))
+                .on_click(self.study_click(Self::advance, cx));
+            if recording {
+                btn = btn.danger();
+            }
+            btn
         });
+        let mut hear = tool("hear", icons::listen(), hear_label, "H", cx)
+            .disabled(self.busy_listening())
+            .on_click(self.study_click(|this, cx| this.hear(Speed::Normal, cx), cx));
+        if audio_active {
+            hear = hear.primary();
+        }
+        let slow = Button::new("hear-slow")
+            .outline()
+            .tab_stop(false)
+            .disabled(self.busy_listening())
+            .child(h_flex().gap_1p5().child("Langzaam").child(keycap("L", cx)))
+            .on_click(self.study_click(|this, cx| this.hear(Speed::Slow, cx), cx));
+        let mut meaning = tool("meaning", icons::meaning(), "Betekenis", "V", cx)
+            .on_click(self.study_click(Self::toggle_english, cx));
+        if attempt.english_shown {
+            meaning = meaning.primary();
+        }
         h_flex()
             .flex_wrap()
             .justify_center()
             .gap_2()
             .children(test)
-            .child(
-                tool("hear", icons::listen(), "Hoor de zin", "H", cx)
-                    .disabled(self.busy_listening())
-                    .on_click(self.study_click(|this, cx| this.hear(Speed::Normal, cx), cx)),
-            )
-            .child(
-                tool("meaning", icons::meaning(), "Betekenis", "V", cx)
-                    .selected(attempt.english_shown)
-                    .on_click(self.study_click(Self::toggle_english, cx)),
-            )
+            .child(hear)
+            .child(slow)
+            .child(meaning)
     }
 
     /// The four scores: how easily the sentence came back. Nothing else.
     fn render_scores(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let card_bg = surface(cx);
         let open = !self.busy_listening();
-        h_flex().gap_2().w_full().max_w(px(600.)).children(Grade::ALL.map(|grade| {
+        h_flex().gap_2p5().w_full().max_w(px(640.)).children(Grade::ALL.map(|grade| {
+            let tone = grade_color(grade, cx);
             v_flex()
                 .id(SharedString::from(format!("grade-{}", grade.number())))
                 .flex_1()
                 .items_center()
-                .gap_1()
-                .pb_2()
+                .gap_1p5()
+                .pb_2p5()
                 .overflow_hidden()
-                .rounded(px(6.))
+                .rounded(px(10.))
                 .border_1()
                 .border_color(theme.border)
-                .bg(theme.secondary)
-                .child(div().w_full().h(px(4.)).mb_1p5().bg(grade_color(grade, cx)))
+                .bg(card_bg)
+                .child(div().w_full().h(px(4.)).mb_1().bg(tone))
                 .child(div().font_weight(FontWeight::MEDIUM).child(grade.label()))
                 .child(keycap(&grade.number().to_string(), cx))
                 .when(!open, |d| d.opacity(0.5))
                 .when(open, |d| {
-                    d.cursor_pointer().hover(|s| s.bg(theme.secondary_hover)).on_click(cx.listener(move |this, _, window, cx| {
-                        this.score(grade, cx);
-                        this.study.focus.focus(window, cx);
-                    }))
+                    d.cursor_pointer()
+                        .hover(move |s| s.border_color(tone).bg(tone.opacity(0.08)))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.score(grade, cx);
+                            this.study.focus.focus(window, cx);
+                        }))
                 })
         }))
     }
@@ -421,14 +486,22 @@ impl FlashcardsApp {
             .flex_1()
             .items_center()
             .justify_center()
-            .child(empty_state(rest.title, &rest.detail, cx))
-            .when_some(rest.action, |d, (label, screen)| {
-                d.child(
-                    Button::new("empty-action")
-                        .primary()
-                        .label(label)
-                        .on_click(cx.listener(move |this, _, window, cx| this.show(screen, window, cx))),
-                )
-            })
+            .child(
+                card_box(cx)
+                    .w_full()
+                    .max_w(px(520.))
+                    .px_6()
+                    .pb_6()
+                    .items_center()
+                    .child(empty_state(rest.title, &rest.detail, cx))
+                    .when_some(rest.action, |d, (label, screen)| {
+                        d.child(
+                            Button::new("empty-action")
+                                .primary()
+                                .label(label)
+                                .on_click(cx.listener(move |this, _, window, cx| this.show(screen, window, cx))),
+                        )
+                    }),
+            )
     }
 }

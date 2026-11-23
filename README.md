@@ -58,9 +58,35 @@ open the meaning).
 Scheduling is FSRS, the algorithm modern Anki uses. New cards are limited per
 day (10 by default, set in Instellingen).
 
+## Gesprek
+
+Practise speaking about a topic. Pick one of the suggested topics, type your
+own, or leave it open. Claude plays the other person and opens the
+conversation; the Dutch voice reads every line out loud.
+
+Answer each line by typing (`Enter` sends) or with **Spreek**. Recording stops
+by itself when you finish, and Whisper writes down what you said. Either way
+your sentence comes back corrected with the next line. A correction shows what
+you said struck through, then how a Dutch speaker would say it, with the
+changed words underlined and a short explanation. English words you didn't
+know the Dutch for are put into Dutch. When you spoke, punctuation and
+capitals aren't corrected.
+
+Each line has **Hoor** and **Langzaam**. Claude's lines also have
+**Betekenis** for the English. **Moeilijk** marks a line to become a card.
+Corrected sentences and lines whose meaning you opened are marked already;
+click to unmark them.
+
+**Afronden** saves the conversation and has Claude draft cards from the marked
+lines: the corrected sentence for your own lines, and the sentence or the hard
+phrase for Claude's. They go to Concepten like any other drafts, and **Bron**
+shows the whole conversation. If nothing was marked, the conversation is saved
+without cards. A conversation in progress is lost if you close the app.
+
 ## Screens
 
 - **Oefenen** – study.
+- **Gesprek** – a conversation with Claude that becomes cards (above).
 - **Toevoegen** – paste a snippet. Corrections of your own mistakes become cards
   first, then new phrases and words. An optional line steers it ("alleen de
   correcties", "max 3 kaarten"). Lines typed as `Nederlands | English | uitleg`
@@ -86,8 +112,9 @@ scripts/fetch-models.sh      # Piper voices + Whisper, ~830 MB, checksummed
 cargo run --release -p dutch-flashcards
 ```
 
-Card drafting runs `claude -p` with your Claude Code login (no API key). Each
-paste is one request and takes 5–15 seconds.
+Card drafting and conversations run `claude -p` with your Claude Code login (no
+API key). Each paste is one request and takes 5–15 seconds; each conversation
+turn takes about 3 seconds.
 
 ## Where things live
 
@@ -108,7 +135,7 @@ wrong, the end of this file says what happened. A crash in native code
 | `DUTCH_FLASHCARDS_DATA` | `$XDG_DATA_HOME/dutch-flashcards` |
 | `DUTCH_FLASHCARDS_VOICES` | `<data>/voices` |
 | `DUTCH_FLASHCARDS_MODELS` | `<data>/models` (Whisper large-v3-turbo) |
-| `DUTCH_FLASHCARDS_MODEL` | `sonnet` (the Claude model used for drafting) |
+| `DUTCH_FLASHCARDS_MODEL` | `sonnet` (the Claude model for drafting and conversations) |
 | `DUTCH_FLASHCARDS_CLAUDE` / `DUTCH_FLASHCARDS_PIPER` / `DUTCH_FLASHCARDS_WHISPER` | `claude` / `piper` / `whisper-cli` on `PATH` |
 
 ## Voices
@@ -131,10 +158,13 @@ words right, while the female voices built from audiobook recordings (MLS) got
 - `scripts/capture.sh` – runs the app in a headless Weston session and saves a
   screenshot. With `--screen <name>`, `--keys "space v"` and
   `--appearance donker` it can show any screen and study state; `--recording file.wav`
-  stands in for the microphone, and `wacht` in `--keys` waits for Whisper. On
+  stands in for the microphone, and `wacht` in `--keys` waits for Whisper and
+  Claude. On `--screen gesprek`, `--keys "begin wacht spreek wacht"` starts a
+  conversation and answers it with the recording. On
   `--screen instellingen`, `--keys microfoon` runs the microphone test.
 - `scripts/fetch-models.sh` – downloads the voices and the speech recognizer.
-- `crates/core/examples/` – `draft` (try the drafting prompt on a snippet) and
+- `crates/core/examples/` – `draft` (try the drafting prompt on a snippet),
+  `talk` (try the conversation prompt: one answer per line on stdin) and
   `import` (add `Nederlands | English` lines from stdin).
 - `docs/` – the original plan, the clickable mockup, the study-panel plan and
   the RustQualityLens review (`rustqualitylens-review.md`).

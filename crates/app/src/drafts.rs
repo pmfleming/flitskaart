@@ -3,15 +3,16 @@
 use dutch_flashcards_core::{Card, CardId};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Colorize as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, Context, Div, ElementId, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    App, AppContext as _, Context, Div, ElementId, Entity, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 
-use crate::app::FlashcardsApp;
-use crate::ui::{empty_state, heading, hint};
+use crate::app::{FlashcardsApp, Screen};
+use crate::icons;
+use crate::ui::{card_box, empty_state, field_label, heading, hint};
 
 /// One draft with its editable fields.
 pub struct DraftRow {
@@ -34,10 +35,10 @@ impl DraftRow {
         };
         DraftRow {
             id: card.id,
-            dutch: field(&card.dutch, "Nederlands"),
+            dutch: field(&card.dutch, "Nederlandse zin of uitdrukking"),
             english: field(&card.english, "Vertaling (verborgen bij het oefenen)"),
-            note: field(&card.note, "Uitleg in eenvoudig Nederlands (optioneel)"),
-            tags: field(&card.tags, "Onderwerp"),
+            note: field(&card.note, "Korte uitleg in eenvoudig Nederlands (optioneel)"),
+            tags: field(&card.tags, "bijv. boodschappen, werk, grammatica"),
             snippet_id: card.snippet_id,
             show_english: false,
             show_source: false,
@@ -50,22 +51,29 @@ impl DraftRow {
         [&self.dutch, &self.english, &self.note, &self.tags].map(|state| state.read(cx).value().to_string())
     }
 
-    /// The Dutch and the note, and the translation when `english` is on.
-    pub fn fields(&self, english: bool) -> Div {
+    /// The Dutch and the note, and the translation when `english` is on, each labeled.
+    pub fn fields(&self, english: bool, cx: &App) -> Div {
         v_flex()
-            .gap_2()
-            .child(Input::new(&self.dutch).large())
-            .child(Input::new(&self.note))
-            .when(english, |d| d.child(Input::new(&self.english)))
+            .gap_2p5()
+            .child(v_flex().gap_1().child(field_label("Nederlands", cx)).child(Input::new(&self.dutch).large()))
+            .child(v_flex().gap_1().child(field_label("Uitleg (optioneel)", cx)).child(Input::new(&self.note)))
+            .when(english, |d| {
+                d.child(v_flex().gap_1().child(field_label("Vertaling", cx)).child(Input::new(&self.english)))
+            })
     }
 
     /// Reads the Dutch as typed so far.
     pub fn listen_button(&self, id: impl Into<ElementId>, cx: &mut Context<FlashcardsApp>) -> Button {
         let dutch = self.dutch.clone();
-        Button::new(id).ghost().small().label("Luister").on_click(cx.listener(move |this, _, _, cx| {
-            let text = dutch.read(cx).value().to_string();
-            this.say(text, cx);
-        }))
+        Button::new(id)
+            .ghost()
+            .small()
+            .icon(icons::listen())
+            .label("Luister")
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let text = dutch.read(cx).value().to_string();
+                this.say(text, cx);
+            }))
     }
 }
 
@@ -100,7 +108,7 @@ impl FlashcardsApp {
     fn accept_all(&mut self, cx: &mut Context<Self>) {
         let ids: Vec<CardId> = self.drafts.iter().map(|row| row.id).collect();
         let accepted = ids.into_iter().filter(|id| self.accept_draft(*id, cx)).count();
-        self.info(format!("{accepted} kaarten bewaard."));
+        self.info(format!("{accepted} kaarten bewaard."), cx);
         self.after_deck_change(cx);
     }
 
@@ -134,64 +142,167 @@ impl FlashcardsApp {
 
     pub fn render_drafts(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         if self.drafts.is_empty() {
-            let empty = empty_state("Geen concepten", "Plak een stuk van een gesprek bij Toevoegen om kaarten te maken.", cx);
-            return v_flex().size_full().items_center().justify_center().child(empty).into_any_element();
+            return v_flex()
+                .size_full()
+                .p_5()
+                .items_center()
+                .justify_center()
+                .child(
+                    card_box(cx)
+                        .w_full()
+                        .max_w(px(520.))
+                        .px_6()
+                        .pb_6()
+                        .items_center()
+                        .child(empty_state("Geen concepten", "Plak een stuk van een gesprek bij Toevoegen om kaarten te maken.", cx))
+                        .child(
+                            Button::new("drafts-empty-add")
+                                .primary()
+                                .label("Kaarten toevoegen")
+                                .on_click(cx.listener(|this, _, window, cx| this.show(Screen::Add, window, cx))),
+                        ),
+                )
+                .into_any_element();
         }
+        let total = self.drafts.len();
+        let duplicates = self.drafts.iter().filter(|r| r.duplicate).count();
+        let subtitle = if duplicates > 0 {
+            format!("Controleer elke kaart voordat hij in je stapel komt · {duplicates} mogelijk dubbel.")
+        } else {
+            "Controleer elke kaart voordat hij in je stapel komt.".to_string()
+        };
         let rows: Vec<_> = self.drafts.iter().map(|row| self.render_draft_row(row, cx)).collect();
         let title = v_flex()
-            .gap_1()
-            .child(heading(format!("{} concepten", self.drafts.len())))
-            .child(hint("Controleer elke kaart voordat hij in je stapel komt.", cx));
-        let accept_all = Button::new("accept-all").primary().label("Alles bewaren").on_click(cx.listener(|this, _, _, cx| this.accept_all(cx)));
+            .gap_0p5()
+            .child(heading(if total == 1 { "1 concept".to_string() } else { format!("{total} concepten") }))
+            .child(hint(subtitle, cx));
+        let accept_all = Button::new("accept-all")
+            .primary()
+            .label(format!("Alles bewaren ({total})"))
+            .on_click(cx.listener(|this, _, _, cx| this.accept_all(cx)));
         v_flex()
             .size_full()
             .p_5()
-            .gap_3()
-            .child(h_flex().justify_between().gap_3().child(title).child(accept_all))
-            .child(v_flex().id("draft-list").flex_1().min_h_0().overflow_y_scroll().gap_3().pb_4().children(rows))
+            .gap_4()
+            .child(h_flex().w_full().max_w(px(820.)).mx_auto().justify_between().items_center().gap_3().child(title).child(accept_all))
+            .child(
+                v_flex()
+                    .id("draft-list")
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .max_w(px(820.))
+                    .mx_auto()
+                    .overflow_y_scroll()
+                    .gap_3()
+                    .pb_6()
+                    .children(rows),
+            )
             .into_any_element()
     }
 
     fn render_draft_row(&self, row: &DraftRow, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
         let source = row.snippet_id.filter(|_| row.show_source).and_then(|id| self.store.snippet(id).ok().flatten());
-        let tags = h_flex()
-            .gap_2()
-            .child(div().text_sm().text_color(theme.muted_foreground).child("Onderwerp"))
-            .child(div().w(px(220.)).child(Input::new(&row.tags).small()));
-        v_flex()
-            .p_3()
-            .gap_2()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.secondary)
-            .child(row.fields(row.show_english))
+        let tags = v_flex()
+            .gap_1()
+            .w(px(280.))
+            .child(field_label("Onderwerp", cx))
+            .child(Input::new(&row.tags).small());
+        let duplicate_banner = row.duplicate.then(|| {
+            h_flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_1p5()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(theme.warning.opacity(0.45))
+                .bg(theme.warning.opacity(0.14))
+                .child(div().flex_none().size(px(8.)).rounded_full().bg(theme.warning))
+                .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(theme.foreground).child("Mogelijk dubbel:"))
+                .child(div().text_sm().text_color(theme.foreground).child("deze zin staat al in je stapel of bij de concepten."))
+        });
+        card_box(cx)
+            .p_4()
+            .gap_3()
+            .when(row.duplicate, |d| d.border_color(theme.warning.opacity(0.65)))
+            .children(duplicate_banner)
+            .child(row.fields(row.show_english, cx))
             .child(tags)
-            .when(row.duplicate, |d| d.child(div().text_sm().text_color(theme.warning).child("Deze zin staat al in je stapel of bij de concepten.")))
-            .when_some(source, |d, text| d.child(div().p_2().rounded(px(6.)).bg(theme.background).text_sm().text_color(theme.muted_foreground).child(text)))
+            .when_some(source, |d, text| {
+                d.child(
+                    div()
+                        .p_3()
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.muted)
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child(text),
+                )
+            })
             .child(self.render_draft_buttons(row, cx))
     }
 
-    /// Bewaar, Weggooien, Luister, and the translation and source switches.
+    /// Inspection tools on the left; discard/keep decisions cleanly separated on the right.
     fn render_draft_buttons(&self, row: &DraftRow, cx: &mut Context<Self>) -> impl IntoElement {
         let id = row.id;
-        let switch = |name: &'static str, label: &'static str, flip: fn(&mut DraftRow) -> &mut bool, cx: &mut Context<Self>| {
-            Button::new((name, id as u64)).ghost().small().label(label).on_click(cx.listener(move |this, _, _, cx| this.toggle_draft(id, flip, cx)))
-        };
-        let english = if row.show_english { "Verberg vertaling" } else { "Vertaling" };
-        let source = if row.show_source { "Verberg bron" } else { "Bron" };
-        h_flex()
-            .gap_2()
+        let english_label = if row.show_english { "Verberg vertaling" } else { "Vertaling" };
+        let source_label = if row.show_source { "Verberg bron" } else { "Bron" };
+        let mut english_btn = Button::new(("english", id as u64))
+            .ghost()
+            .small()
+            .icon(icons::meaning())
+            .label(english_label)
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_draft(id, |row| &mut row.show_english, cx)));
+        if row.show_english {
+            english_btn = english_btn.outline().primary();
+        }
+        let mut source_btn = Button::new(("source", id as u64))
+            .ghost()
+            .small()
+            .label(source_label)
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_draft(id, |row| &mut row.show_source, cx)));
+        if row.show_source {
+            source_btn = source_btn.outline().primary();
+        }
+        let inspect = h_flex()
+            .gap_1p5()
             .flex_wrap()
-            .child(Button::new(("accept", id as u64)).primary().small().label("Bewaar").on_click(cx.listener(move |this, _, _, cx| {
-                if this.accept_draft(id, cx) {
-                    this.after_deck_change(cx);
-                }
-            })))
-            .child(Button::new(("discard", id as u64)).outline().small().label("Weggooien").on_click(cx.listener(move |this, _, _, cx| this.discard_draft(id, cx))))
             .child(row.listen_button(("listen", id as u64), cx))
-            .child(switch("english", english, |row| &mut row.show_english, cx))
-            .when(row.snippet_id.is_some(), |d| d.child(switch("source", source, |row| &mut row.show_source, cx)))
+            .child(english_btn)
+            .when(row.snippet_id.is_some(), |d| d.child(source_btn));
+        let decide = h_flex()
+            .gap_2()
+            .child(
+                Button::new(("discard", id as u64))
+                    .ghost()
+                    .small()
+                    .label("Weggooien")
+                    .on_click(cx.listener(move |this, _, _, cx| this.discard_draft(id, cx))),
+            )
+            .child(
+                Button::new(("accept", id as u64))
+                    .primary()
+                    .small()
+                    .label("Bewaar")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.accept_draft(id, cx) {
+                            this.after_deck_change(cx);
+                        }
+                    })),
+            );
+        h_flex()
+            .pt_2()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .justify_between()
+            .items_center()
+            .flex_wrap()
+            .gap_2()
+            .child(inspect)
+            .child(decide)
     }
 }

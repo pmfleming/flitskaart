@@ -6,7 +6,8 @@ fn main() -> anyhow::Result<()> {
     std::io::stdin().read_to_string(&mut snippet)?;
     let steer = std::env::args().nth(1).unwrap_or_default();
     let started = std::time::Instant::now();
-    let cards = dutch_flashcards_core::drafting::draft_cards(&snippet, &steer, dutch_flashcards_core::drafting::DEFAULT_LIMIT)?;
+    let claude = dutch_flashcards_core::claude::Claude::from_env();
+    let cards = dutch_flashcards_core::drafting::draft_cards(&claude, &snippet, &steer, dutch_flashcards_core::drafting::DEFAULT_LIMIT)?;
     eprintln!("{} cards in {:.1}s", cards.len(), started.elapsed().as_secs_f32());
     println!("{}", serde_json::to_string_pretty(&cards)?);
     Ok(())
