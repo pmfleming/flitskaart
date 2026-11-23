@@ -3,6 +3,7 @@
 mod add;
 mod app;
 mod audio;
+mod capture;
 mod deck;
 mod drafts;
 mod icons;
@@ -12,11 +13,20 @@ mod recorder;
 mod settings;
 mod speaking;
 mod study;
+#[cfg(test)]
+mod tests;
 mod ui;
+
+use std::collections::VecDeque;
+use std::time::Duration;
 
 use dutch_flashcards_core::store::Appearance;
 use dutch_flashcards_core::{Store, paths::Paths};
-use gpui_kit::*;
+use gpui_kit::{
+    AppContext as _, Bounds, Context, QuitMode, TitlebarOptions, Window, WindowBounds, WindowOptions, px, size,
+};
+
+use crate::app::{FlashcardsApp, Screen};
 
 /// Developer flags for screenshots and checks:
 /// `--screen <oefenen|toevoegen|concepten|kaarten|instellingen>` opens that screen,
@@ -26,7 +36,7 @@ use gpui_kit::*;
 #[derive(Default)]
 struct DevArgs {
     screen: Option<String>,
-    keys: Vec<String>,
+    keys: VecDeque<String>,
     appearance: Option<Appearance>,
     recording: Option<std::path::PathBuf>,
 }
@@ -61,35 +71,66 @@ fn main() {
         }
     };
 
-    gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
-        .with_quit_mode(QuitMode::LastWindowClosed)
-        .run(move |cx| {
-            gpui_kit::init(cx);
-            let bounds = Bounds::centered(None, size(px(1000.), px(740.)), cx);
-            let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Nederlandse kaarten".into()),
-                    ..Default::default()
-                }),
-                app_id: Some("dutch-flashcards".into()),
-                window_min_size: Some(size(px(560.), px(480.))),
-                ..Default::default()
-            };
-            gpui_kit::open_window(options, cx, |window, cx| {
-                cx.new(|cx| {
-                    let mut app = app::FlashcardsApp::new(store, paths, window, cx);
-                    app.fake_recording = dev.recording.clone();
-                    if let Some(appearance) = dev.appearance {
-                        app.settings.appearance = appearance;
-                        app.apply_appearance(window, cx);
-                    }
-                    app.replay(dev.screen.as_deref(), &dev.keys, window, cx);
-                    app
-                })
+    gpui_kit::application().with_assets(gpui_kit::assets::Assets).with_quit_mode(QuitMode::LastWindowClosed).run(move |cx| {
+        gpui_kit::init(cx);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1000.), px(740.)), cx))),
+            titlebar: Some(TitlebarOptions { title: Some("Nederlandse kaarten".into()), ..Default::default() }),
+            app_id: Some("dutch-flashcards".into()),
+            window_min_size: Some(size(px(560.), px(480.))),
+            ..Default::default()
+        };
+        let opened = gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| {
+                let mut app = FlashcardsApp::new(store, paths, window, cx);
+                app.replay(dev, window, cx);
+                app
             })
-            .expect("could not open the window");
-            cx.activate(true);
         });
+        if let Err(err) = opened {
+            logging::error("start", format!("Het venster ging niet open: {err:#}"));
+            cx.quit();
+        }
+        cx.activate(true);
+    });
+}
+
+impl FlashcardsApp {
+    /// Applies the developer flags: a stand-in recording, colours, a screen and keys.
+    fn replay(&mut self, dev: DevArgs, window: &mut Window, cx: &mut Context<Self>) {
+        self.fake_recording = dev.recording;
+        if let Some(appearance) = dev.appearance {
+            self.settings.appearance = appearance;
+            self.apply_appearance(window, cx);
+        }
+        match dev.screen.as_deref().map(|name| (name, Screen::named(name))) {
+            Some((_, Some(screen))) => self.show(screen, window, cx),
+            Some((name, None)) => self.error(format!("Onbekend scherm: {name}")),
+            None => {}
+        }
+        self.replay_keys(dev.keys, window, cx);
+    }
+
+    /// Replays study keys; on Instellingen, `microfoon` runs the microphone
+    /// test. `wacht` waits until recording and listening are done.
+    fn replay_keys(&mut self, mut keys: VecDeque<String>, window: &mut Window, cx: &mut Context<Self>) {
+        while let Some(key) = keys.pop_front() {
+            match (self.screen, key.as_str()) {
+                (_, "wacht") => return self.replay_when_idle(keys, window, cx),
+                (Screen::Study, key) => _ = self.study_key(key, window, cx),
+                (Screen::Settings, "microfoon") => self.start_mic_test(cx),
+                _ => {}
+            }
+        }
+    }
+
+    fn replay_when_idle(&mut self, keys: VecDeque<String>, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            while this.update(cx, |this, _| this.busy()).unwrap_or(false) {
+                cx.background_executor().timer(Duration::from_millis(100)).await;
+            }
+            let _ = this.update_in(cx, |this, window, cx| this.replay_keys(keys, window, cx));
+        })
+        .detach();
+    }
 }

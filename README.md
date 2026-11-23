@@ -126,6 +126,8 @@ words right, while the female voices built from audiobook recordings (MLS) got
   drafting. No UI code; tested with `cargo test`.
 - `crates/app` – the window, built with [GPUI Community Edition](https://gpui-ce.github.io)
   and its component kit. The study panel's own icons are in `crates/app/assets/icons`.
+  `src/tests.rs` drives the whole app in GPUI's headless test window (an empty
+  deck, no voices or Whisper), so `cargo test` covers the screens too.
 - `scripts/capture.sh` – runs the app in a headless Weston session and saves a
   screenshot. With `--screen <name>`, `--keys "space v"` and
   `--appearance donker` it can show any screen and study state; `--recording file.wav`
@@ -134,4 +136,8 @@ words right, while the female voices built from audiobook recordings (MLS) got
 - `scripts/fetch-models.sh` – downloads the voices and the speech recognizer.
 - `crates/core/examples/` – `draft` (try the drafting prompt on a snippet) and
   `import` (add `Nederlands | English` lines from stdin).
-- `docs/` – the original plan and the clickable mockup.
+- `docs/` – the original plan, the clickable mockup, the study-panel plan and
+  the RustQualityLens review (`rustqualitylens-review.md`).
+- `rqlens.toml` – configuration for [rust-quality-lens](../rust-quality-lens):
+  `rqlens measure hotspots` and the other producers write their evidence to
+  `target/analysis`.

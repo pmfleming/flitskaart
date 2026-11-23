@@ -1,0 +1,16 @@
+project_name = "dutch-flashcards"
+project_root = "."
+source_roots = ["crates/core/src", "crates/core/examples", "crates/app/src"]
+output_dir = "target/analysis"
+# include_bytes! assets that shape the app's build.
+fingerprint_inputs = ["crates/app/assets"]
+
+[rust]
+identity_resolution = "auto"
+identity_offline = true
+helper_manifest = "../rust-quality-lens/rust_helpers/Cargo.toml"
+
+[verification]
+workspace = true
+all_targets = true
+locked = true

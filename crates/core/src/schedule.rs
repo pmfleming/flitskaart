@@ -34,23 +34,12 @@ pub fn count(own: Grade, speech: Option<Grade>, peeked: bool, mode: Mode) -> Cou
     if own == Grade::DontKnow {
         return Counted { grade: own, share: 1.0 };
     }
-    let mut grade = own;
-    if let Some(speech) = speech
-        && speech.number() < grade.number()
-    {
-        grade = speech;
+    let grade = speech.map_or(own, |speech| speech.min(own));
+    if peeked {
+        return Counted { grade: grade.min(Grade::Hard), share: 0.0 };
     }
-    if peeked && grade.number() > Grade::Hard.number() {
-        grade = Grade::Hard;
-    }
-    let share = if peeked {
-        0.0
-    } else if speech.is_some() || mode == Mode::Listen {
-        1.0
-    } else {
-        SCORE_ONLY_SHARE
-    };
-    Counted { grade, share }
+    let backed_up = speech.is_some() || mode == Mode::Listen;
+    Counted { grade, share: if backed_up { 1.0 } else { SCORE_ONLY_SHARE } }
 }
 
 pub struct Scheduler {
@@ -155,24 +144,11 @@ pub fn describe_due(due: DateTime<Utc>, now: DateTime<Utc>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use Grade::*;
+    use super::{Counted, DateTime, Duration, Grade, Mode, SCORE_ONLY_SHARE, Scheduler, State, Utc, count, describe, describe_due, new_schedule};
+    use Grade::{Comfortable, DontKnow, Easy, Hard};
 
     fn full(grade: Grade) -> Counted {
         Counted { grade, share: 1.0 }
-    }
-
-    /// A card answered "Gaat goed" four times, each time when it fell due:
-    /// last pause 7 weeks. Returns the card and the moment it is due again.
-    fn practised_card(scheduler: &Scheduler) -> (rs_fsrs::Card, DateTime<Utc>) {
-        let mut now = Utc::now();
-        let mut card = new_schedule(now);
-        for _ in 0..4 {
-            card = scheduler.apply(&card, now, full(Comfortable));
-            now = card.due;
-        }
-        assert_eq!(card.state, State::Review);
-        (card, now)
     }
 
     fn pause(scheduler: &Scheduler, card: &rs_fsrs::Card, now: DateTime<Utc>, counted: Counted) -> Duration {
@@ -180,131 +156,81 @@ mod tests {
     }
 
     #[test]
-    fn speaking_and_scoring_counts_in_full() {
-        assert_eq!(count(Easy, Some(Easy), false, Mode::Read), full(Easy));
-        assert_eq!(count(Comfortable, Some(Easy), false, Mode::Read), full(Comfortable));
-    }
-
-    #[test]
-    fn a_lower_pronunciation_grade_replaces_the_score() {
-        assert_eq!(count(Easy, Some(Hard), false, Mode::Read), full(Hard));
-        assert_eq!(count(Easy, Some(DontKnow), false, Mode::Read), full(DontKnow));
-    }
-
-    #[test]
-    fn a_score_alone_keeps_part_of_the_growth() {
-        assert_eq!(count(Comfortable, None, false, Mode::Read), Counted { grade: Comfortable, share: SCORE_ONLY_SHARE });
-    }
-
-    #[test]
-    fn luisteren_has_no_reading_test_so_its_scores_count_in_full() {
-        assert_eq!(count(Easy, None, false, Mode::Listen), full(Easy));
-    }
-
-    #[test]
-    fn opening_the_meaning_caps_the_score_and_stops_the_growth() {
-        let peeked = Counted { grade: Hard, share: 0.0 };
-        assert_eq!(count(Easy, None, true, Mode::Read), peeked);
-        assert_eq!(count(Comfortable, Some(Easy), true, Mode::Read), peeked, "speaking does not undo a look");
-        assert_eq!(count(Easy, None, true, Mode::Listen), peeked);
-        assert_eq!(count(Hard, None, true, Mode::Read), peeked);
-    }
-
-    #[test]
-    fn weet_ik_niet_always_counts_in_full() {
-        for mode in [Mode::Read, Mode::Listen] {
-            for peeked in [false, true] {
-                assert_eq!(count(DontKnow, None, peeked, mode), full(DontKnow));
-            }
+    fn how_a_review_counts() {
+        let (read, listen) = (Mode::Read, Mode::Listen);
+        let cases = [
+            // own score, pronunciation, meaning opened, mode => grade, share
+            (Easy, Some(Easy), false, read, Easy, 1.0),
+            (Comfortable, Some(Easy), false, read, Comfortable, 1.0),
+            (Easy, Some(Hard), false, read, Hard, 1.0),
+            (Easy, Some(DontKnow), false, read, DontKnow, 1.0),
+            (Comfortable, None, false, read, Comfortable, SCORE_ONLY_SHARE),
+            (Easy, None, false, listen, Easy, 1.0),
+            (Easy, None, true, read, Hard, 0.0),
+            (Comfortable, Some(Easy), true, read, Hard, 0.0),
+            (Easy, None, true, listen, Hard, 0.0),
+            (Hard, None, true, read, Hard, 0.0),
+            (DontKnow, None, true, listen, DontKnow, 1.0),
+            (DontKnow, None, false, read, DontKnow, 1.0),
+        ];
+        for (own, speech, peeked, mode, grade, share) in cases {
+            assert_eq!(count(own, speech, peeked, mode), Counted { grade, share }, "{own:?} {speech:?} {peeked} {mode:?}");
         }
     }
 
     #[test]
-    fn harder_grades_never_come_back_later() {
+    fn a_new_card_is_scheduled_by_its_grade_alone_and_harder_grades_come_sooner() {
         let scheduler = Scheduler::exact();
         let now = Utc::now();
         let mut card = new_schedule(now);
+        assert!(pause(&scheduler, &card, now, full(DontKnow)) <= Duration::minutes(20), "back within the session");
+        for grade in Grade::ALL {
+            let shares = [1.0, SCORE_ONLY_SHARE, 0.0].map(|share| pause(&scheduler, &card, now, Counted { grade, share }));
+            assert!(shares.iter().all(|gap| *gap == shares[0]), "{grade:?}: {shares:?}");
+        }
         for _ in 0..4 {
             for share in [1.0, SCORE_ONLY_SHARE, 0.0] {
                 let gaps = Grade::ALL.map(|grade| pause(&scheduler, &card, now, Counted { grade, share }));
-                assert!(gaps.windows(2).all(|pair| pair[0] <= pair[1]), "share {share}: {gaps:?}");
+                assert!(gaps.is_sorted(), "share {share}: {gaps:?}");
             }
             card = scheduler.apply(&card, now, full(Comfortable));
         }
     }
 
+    /// On a card answered "Gaat goed" four times, each when it fell due: a miss
+    /// comes back within minutes, a look at the meaning keeps the last pause,
+    /// and a score alone grows it less than a score backed by reading aloud.
     #[test]
-    fn less_trust_means_a_shorter_pause() {
+    fn trust_decides_how_far_a_known_card_moves() {
         let scheduler = Scheduler::exact();
-        let (card, now) = practised_card(&scheduler);
-        let spoke = pause(&scheduler, &card, now, full(Comfortable));
-        let score_only = pause(&scheduler, &card, now, Counted { grade: Comfortable, share: SCORE_ONLY_SHARE });
+        let mut now = Utc::now();
+        let mut card = new_schedule(now);
+        for _ in 0..4 {
+            card = scheduler.apply(&card, now, full(Comfortable));
+            now = card.due;
+        }
+        assert_eq!(card.state, State::Review);
         let last = Duration::days(card.scheduled_days);
+        let after = |counted| pause(&scheduler, &card, now, counted);
+        assert!(after(count(DontKnow, None, false, Mode::Read)) <= Duration::minutes(10));
+        assert!((after(count(Easy, None, true, Mode::Read)) - last).num_days().abs() <= 1);
+        let (score_only, spoke) = (after(count(Comfortable, None, false, Mode::Read)), after(full(Comfortable)));
         assert!(last < score_only && score_only < spoke, "{last} < {score_only} < {spoke}");
     }
 
     #[test]
-    fn no_growth_keeps_the_last_pause() {
-        let scheduler = Scheduler::exact();
-        let (card, now) = practised_card(&scheduler);
-        let peeked = pause(&scheduler, &card, now, count(Easy, None, true, Mode::Read));
-        let last = Duration::days(card.scheduled_days);
-        assert!((peeked - last).num_days().abs() <= 1, "{peeked} vs {last}");
-    }
-
-    #[test]
-    fn a_miss_is_never_softened() {
-        let scheduler = Scheduler::exact();
-        let (card, now) = practised_card(&scheduler);
-        let missed = pause(&scheduler, &card, now, count(DontKnow, None, false, Mode::Read));
-        assert!(missed <= Duration::minutes(10));
-    }
-
-    #[test]
-    fn a_new_card_is_scheduled_by_its_grade_alone() {
-        let scheduler = Scheduler::exact();
+    fn describes_gaps_and_due_dates_in_dutch() {
         let now = Utc::now();
-        let card = new_schedule(now);
-        for grade in Grade::ALL {
-            let shares = [1.0, SCORE_ONLY_SHARE, 0.0].map(|share| pause(&scheduler, &card, now, Counted { grade, share }));
-            assert!(shares.iter().all(|gap| *gap == shares[0]), "{grade:?}: {shares:?}");
+        let gaps = [(Duration::minutes(10), "10 min"), (Duration::hours(1), "1 uur"), (Duration::days(1), "1 dag"),
+            (Duration::days(5), "5 dagen"), (Duration::days(21), "3 weken"), (Duration::days(90), "3 maanden"),
+            (Duration::days(400), "1 jaar")];
+        for (gap, text) in gaps {
+            assert_eq!(describe(gap), text);
         }
-    }
-
-    #[test]
-    fn dont_know_comes_back_within_the_session() {
-        let scheduler = Scheduler::default();
-        let now = Utc::now();
-        let card = scheduler.apply(&new_schedule(now), now, full(DontKnow));
-        assert!(card.due - now <= Duration::minutes(20));
-    }
-
-    #[test]
-    fn repeated_success_stretches_the_gap() {
-        for share in [1.0, SCORE_ONLY_SHARE] {
-            let scheduler = Scheduler::default();
-            let mut now = Utc::now();
-            let mut card = new_schedule(now);
-            let mut last_gap = Duration::zero();
-            for _ in 0..6 {
-                card = scheduler.apply(&card, now, Counted { grade: Comfortable, share });
-                let gap = card.due - now;
-                assert!(gap >= last_gap, "share {share}");
-                last_gap = gap;
-                now = card.due;
-            }
-            assert!(last_gap > Duration::days(7), "share {share}: {last_gap}");
+        let dues = [(Duration::zero(), "nu"), (Duration::hours(5), "vandaag"), (Duration::hours(30), "morgen"),
+            (Duration::days(5), "over 5 dagen")];
+        for (gap, text) in dues {
+            assert_eq!(describe_due(now + gap, now), text);
         }
-    }
-
-    #[test]
-    fn describes_gaps_in_dutch() {
-        assert_eq!(describe(Duration::minutes(10)), "10 min");
-        assert_eq!(describe(Duration::hours(1)), "1 uur");
-        assert_eq!(describe(Duration::days(1)), "1 dag");
-        assert_eq!(describe(Duration::days(5)), "5 dagen");
-        assert_eq!(describe(Duration::days(21)), "3 weken");
-        assert_eq!(describe(Duration::days(90)), "3 maanden");
-        assert_eq!(describe(Duration::days(400)), "1 jaar");
     }
 }

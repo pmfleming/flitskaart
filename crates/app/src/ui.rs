@@ -1,7 +1,7 @@
 //! Small shared pieces of the interface.
 
-use gpui_kit::component::{ActiveTheme as _, h_flex};
-use gpui_kit::*;
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::{App, Div, FontWeight, ParentElement as _, SharedString, Styled as _, div, px};
 
 /// A key hint such as `Spatie` or `V`.
 pub fn keycap(label: &str, cx: &App) -> Div {
@@ -44,6 +44,11 @@ pub fn level_meter(level: f32, cx: &App) -> Div {
 /// A heading for a screen.
 pub fn heading(text: impl Into<SharedString>) -> Div {
     div().text_lg().font_weight(FontWeight::SEMIBOLD).child(text.into())
+}
+
+/// A titled part of a screen with its explanation; add the controls as children.
+pub fn section(title: &str, explanation: impl Into<SharedString>, cx: &App) -> Div {
+    v_flex().gap_3().max_w(px(640.)).child(heading(title.to_string())).child(hint(explanation, cx))
 }
 
 /// A centred message for empty screens, with optional detail.

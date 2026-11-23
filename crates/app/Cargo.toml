@@ -13,3 +13,7 @@ chrono.workspace = true
 libc = "0.2"
 gpui_kit = { package = "gpui_ce_kit", version = "0.3.0" }
 rodio = { version = "0.23.0", default-features = false, features = ["playback", "recording", "wav"] }
+
+[dev-dependencies]
+gpui_kit = { package = "gpui_ce_kit", version = "0.3.0", features = ["test-support"] }
+tempfile.workspace = true

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use rs_fsrs::Rating;
 
 pub type CardId = i64;
 
@@ -14,14 +14,6 @@ pub enum Status {
 }
 
 impl Status {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Status::Draft => "draft",
-            Status::Active => "active",
-            Status::Suspended => "suspended",
-        }
-    }
-
     pub fn parse(value: &str) -> Status {
         match value {
             "active" => Status::Active,
@@ -31,8 +23,8 @@ impl Status {
     }
 }
 
-/// The four self-assessment buttons.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// The four self-assessment buttons, from hardest to easiest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Grade {
     DontKnow = 1,
     Hard = 2,
@@ -42,6 +34,8 @@ pub enum Grade {
 
 impl Grade {
     pub const ALL: [Grade; 4] = [Grade::DontKnow, Grade::Hard, Grade::Comfortable, Grade::Easy];
+    const LABELS: [&str; 4] = ["Weet ik niet", "Moeilijk", "Gaat goed", "Makkelijk"];
+    const RATINGS: [Rating; 4] = [Rating::Again, Rating::Hard, Rating::Good, Rating::Easy];
 
     pub fn from_number(n: u8) -> Option<Grade> {
         Grade::ALL.get(usize::from(n).checked_sub(1)?).copied()
@@ -51,23 +45,18 @@ impl Grade {
         self as u8
     }
 
-    /// The label on the button.
-    pub fn label(self) -> &'static str {
-        match self {
-            Grade::DontKnow => "Weet ik niet",
-            Grade::Hard => "Moeilijk",
-            Grade::Comfortable => "Gaat goed",
-            Grade::Easy => "Makkelijk",
-        }
+    /// Its place in [`Grade::ALL`].
+    pub fn index(self) -> usize {
+        usize::from(self.number() - 1)
     }
 
-    pub(crate) fn rating(self) -> rs_fsrs::Rating {
-        match self {
-            Grade::DontKnow => rs_fsrs::Rating::Again,
-            Grade::Hard => rs_fsrs::Rating::Hard,
-            Grade::Comfortable => rs_fsrs::Rating::Good,
-            Grade::Easy => rs_fsrs::Rating::Easy,
-        }
+    /// The label on the button.
+    pub fn label(self) -> &'static str {
+        Grade::LABELS[self.index()]
+    }
+
+    pub(crate) fn rating(self) -> Rating {
+        Grade::RATINGS[self.index()]
     }
 }
 
@@ -82,8 +71,7 @@ pub struct Card {
     pub tags: String,
     pub status: Status,
     pub snippet_id: Option<i64>,
-    pub created_at: DateTime<Utc>,
-    pub due: Option<DateTime<Utc>>,
+    pub due: Option<chrono::DateTime<chrono::Utc>>,
     pub schedule: rs_fsrs::Card,
     pub reviews: i64,
     pub misses: i64,
@@ -123,7 +111,7 @@ pub fn normalize(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Grade, normalize};
 
     #[test]
     fn normalize_ignores_case_punctuation_and_spacing() {
@@ -132,11 +120,12 @@ mod tests {
     }
 
     #[test]
-    fn grades_round_trip_through_numbers() {
+    fn grades_round_trip_through_numbers_in_order() {
         for grade in Grade::ALL {
             assert_eq!(Grade::from_number(grade.number()), Some(grade));
+            assert_eq!(Grade::ALL[grade.index()], grade);
         }
-        assert_eq!(Grade::from_number(0), None);
-        assert_eq!(Grade::from_number(5), None);
+        assert_eq!([Grade::from_number(0), Grade::from_number(5)], [None, None]);
+        assert!(Grade::ALL.is_sorted());
     }
 }

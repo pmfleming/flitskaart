@@ -4,9 +4,9 @@ use dutch_flashcards_core::drafting::{self, DEFAULT_LIMIT};
 use dutch_flashcards_core::model::NewCard;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex, Disableable as _};
-use gpui_kit::*;
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{App, AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, SharedString, Styled as _, Window, div, px};
 
 use crate::app::{FlashcardsApp, Screen};
 use crate::ui::{heading, hint};
@@ -29,6 +29,10 @@ impl AddState {
             busy: false,
             error: None,
         }
+    }
+
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
+        self.snippet.focus_handle(cx).focus(window, cx);
     }
 }
 
@@ -61,12 +65,13 @@ impl FlashcardsApp {
         self.add.busy = true;
         cx.notify();
         let limit = limit_from(&steer);
-        let job = {
-            let (snippet, steer) = (snippet.clone(), steer.clone());
-            cx.background_executor().spawn(async move { drafting::draft_cards(&snippet, &steer, limit) })
-        };
+        // The job hands the text back with its result, for storing alongside the drafts.
+        let job = cx.background_executor().spawn(async move {
+            let result = drafting::draft_cards(&snippet, &steer, limit);
+            (snippet, steer, result)
+        });
         cx.spawn_in(window, async move |this, cx| {
-            let result = job.await;
+            let (snippet, steer, result) = job.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.add.busy = false;
                 match result {
@@ -101,7 +106,7 @@ impl FlashcardsApp {
         cx.notify();
     }
 
-    pub fn render_add(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn render_add(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let status: SharedString = if self.add.busy {
             "Claude maakt kaarten… dit duurt meestal 5 tot 15 seconden.".into()

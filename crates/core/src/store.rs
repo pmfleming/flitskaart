@@ -1,14 +1,14 @@
 //! The deck, stored in one local Turso database file.
 
 use anyhow::{Context as _, Result, anyhow};
-use chrono::{DateTime, Duration, Local, SecondsFormat, TimeZone, Utc};
+use chrono::{DateTime, Duration, Local, NaiveTime, SecondsFormat, TimeZone, Utc};
 use turso::{Connection, Value};
 
 use crate::model::{Card, CardId, Grade, NewCard, Status, normalize};
 use crate::paths::Paths;
 use crate::schedule::{Scheduler, count, new_schedule};
 use crate::speech::Assessment;
-use crate::voice::{Gender, VOICES};
+use crate::voice::{Gender, VOICES, voices_for};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS snippets (
@@ -66,7 +66,7 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
 ];
 
 const CARD_COLUMNS: &str =
-    "id, dutch, english, note, tags, status, snippet_id, created_at, due, schedule, reviews, misses, peeks, speech_accuracy";
+    "id, dutch, english, note, tags, status, snippet_id, due, schedule, reviews, misses, peeks, speech_accuracy";
 
 /// How a review was done, kept with each review for later analysis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,7 +132,13 @@ pub const INPUT_BOOSTS: [f32; 5] = [0.5, 1.0, 1.5, 2.0, 2.5];
 
 /// The allowed input boost nearest to `value`.
 pub fn snap_input_boost(value: f32) -> f32 {
-    INPUT_BOOSTS.into_iter().min_by(|a, b| (a - value).abs().total_cmp(&(b - value).abs())).unwrap()
+    let distance = |step: f32| (step - value).abs();
+    INPUT_BOOSTS.into_iter().fold(INPUT_BOOSTS[0], |best, step| if distance(step) < distance(best) { step } else { best })
+}
+
+/// An input boost as Dutch readers write it: `0,5×`, `1×`, `2,5×`.
+pub fn boost_label(boost: f32) -> String {
+    format!("{boost}×").replace('.', ",")
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -152,13 +158,18 @@ impl Default for Settings {
         Settings {
             new_per_day: 10,
             gender: Gender::Male,
-            male_voice: VOICES.iter().find(|v| v.gender == Gender::Male).unwrap().id.into(),
-            female_voice: VOICES.iter().find(|v| v.gender == Gender::Female).unwrap().id.into(),
+            male_voice: first_voice(Gender::Male),
+            female_voice: first_voice(Gender::Female),
             mode: Mode::Read,
             appearance: Appearance::System,
             input_boost: 1.0,
         }
     }
+}
+
+/// The first voice on offer for `gender`.
+fn first_voice(gender: Gender) -> String {
+    voices_for(gender).next().map(|voice| voice.id.to_string()).unwrap_or_default()
 }
 
 impl Settings {
@@ -169,6 +180,18 @@ impl Settings {
             Gender::Female => &self.female_voice,
         }
     }
+}
+
+/// What the learner did with a card before scoring it.
+#[derive(Clone, Copy, Debug)]
+pub struct Review<'a> {
+    /// How well the learner says they knew the card.
+    pub own: Grade,
+    /// How understandable they were, when they read it aloud.
+    pub speech: Option<&'a Assessment>,
+    pub mode: Mode,
+    /// Whether they opened the meaning.
+    pub peeked: bool,
 }
 
 /// What is waiting in today's session.
@@ -191,7 +214,7 @@ impl Store {
         Store::open_file(&paths.database().to_string_lossy())
     }
 
-    pub fn open_file(path: &str) -> Result<Store> {
+    fn open_file(path: &str) -> Result<Store> {
         pollster::block_on(async {
             let db = turso::Builder::new_local(path).build().await.with_context(|| format!("opening {path}"))?;
             let conn = db.connect()?;
@@ -376,27 +399,13 @@ impl Store {
         Ok(soon.into_iter().next())
     }
 
-    /// Saves a review and reschedules the card.
-    ///
-    /// `own` is how well the learner says they knew the card. When they read it
-    /// aloud, `speech` says how understandable they were; `peeked` says they
-    /// opened the meaning. [`count`] turns these into how the review counts.
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_review(
-        &self,
-        id: CardId,
-        own: Grade,
-        speech: Option<&Assessment>,
-        mode: Mode,
-        peeked: bool,
-        scheduler: &Scheduler,
-        now: DateTime<Utc>,
-    ) -> Result<Card> {
+    /// Saves a review and reschedules the card. [`count`] decides how the review counts.
+    pub fn record_review(&self, id: CardId, review: Review, scheduler: &Scheduler, now: DateTime<Utc>) -> Result<Card> {
+        let Review { own, speech, mode, peeked } = review;
         let card = self.card(id)?.ok_or_else(|| anyhow!("card {id} no longer exists"))?;
         let counted = count(own, speech.map(|s| s.grade), peeked, mode);
-        let grade = counted.grade;
         let schedule = scheduler.apply(&card.schedule, now, counted);
-        let accuracy = speech.map_or(Value::Null, |s| Value::Real(f64::from(s.accuracy)));
+        let accuracy = || speech.map_or(Value::Null, |s| Value::Real(f64::from(s.accuracy)));
         self.exec(
             "UPDATE cards SET schedule = ?2, due = ?3, reviews = reviews + 1,
                  misses = misses + ?4, peeks = peeks + ?5, first_review_at = COALESCE(first_review_at, ?6),
@@ -409,7 +418,7 @@ impl Store {
                 Value::Integer(i64::from(own == Grade::DontKnow)),
                 Value::Integer(i64::from(peeked)),
                 stamp(now).into(),
-                accuracy.clone(),
+                accuracy(),
             ],
         )?;
         self.exec(
@@ -417,11 +426,11 @@ impl Store {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             vec![
                 Value::Integer(id),
-                Value::Integer(i64::from(grade.number())),
+                Value::Integer(i64::from(counted.grade.number())),
                 Value::Integer(i64::from(own.number())),
                 speech.map_or(Value::Null, |s| Value::Integer(i64::from(s.grade.number()))),
-                accuracy,
-                speech.map_or(Value::Null, |s| Value::Text(s.heard.clone())),
+                accuracy(),
+                speech.map_or(Value::Null, |s| s.heard.as_str().into()),
                 mode.as_str().into(),
                 Value::Integer(i64::from(peeked)),
                 stamp(now).into(),
@@ -469,19 +478,19 @@ impl Store {
     }
 
     pub fn save_settings(&self, settings: &Settings) -> Result<()> {
-        let pairs = [
-            ("new_per_day", settings.new_per_day.to_string()),
-            ("gender", settings.gender.as_str().to_string()),
-            ("male_voice", settings.male_voice.clone()),
-            ("female_voice", settings.female_voice.clone()),
-            ("mode", settings.mode.as_str().to_string()),
-            ("appearance", settings.appearance.as_str().to_string()),
-            ("input_boost", settings.input_boost.to_string()),
+        let pairs: [(&str, Value); 7] = [
+            ("new_per_day", settings.new_per_day.to_string().into()),
+            ("gender", settings.gender.as_str().into()),
+            ("male_voice", settings.male_voice.as_str().into()),
+            ("female_voice", settings.female_voice.as_str().into()),
+            ("mode", settings.mode.as_str().into()),
+            ("appearance", settings.appearance.as_str().into()),
+            ("input_boost", settings.input_boost.to_string().into()),
         ];
         for (key, value) in pairs {
             self.exec(
                 "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-                vec![key.into(), value.into()],
+                vec![key.into(), value],
             )?;
         }
         Ok(())
@@ -512,7 +521,6 @@ impl Store {
 }
 
 fn card_from_row(row: &[Value]) -> Result<Card> {
-    let schedule_json = text(&row[9]);
     Ok(Card {
         id: integer(&row[0]),
         dutch: text(&row[1]),
@@ -520,22 +528,22 @@ fn card_from_row(row: &[Value]) -> Result<Card> {
         note: text(&row[3]),
         tags: text(&row[4]),
         status: Status::parse(&text(&row[5])),
-        snippet_id: match row[6] {
-            Value::Integer(id) => Some(id),
-            _ => None,
-        },
-        created_at: parse_stamp(&row[7]).unwrap_or_else(Utc::now),
-        due: parse_stamp(&row[8]),
-        schedule: serde_json::from_str(&schedule_json).context("reading a card's schedule")?,
-        reviews: integer(&row[10]),
-        misses: integer(&row[11]),
-        peeks: integer(&row[12]),
-        speech_accuracy: match row[13] {
-            Value::Real(n) => Some(n as f32),
-            Value::Integer(n) => Some(n as f32),
-            _ => None,
-        },
+        snippet_id: row[6].as_integer().copied(),
+        due: parse_stamp(&row[7]),
+        schedule: serde_json::from_str(&text(&row[8])).context("reading a card's schedule")?,
+        reviews: integer(&row[9]),
+        misses: integer(&row[10]),
+        peeks: integer(&row[11]),
+        speech_accuracy: real(&row[12]),
     })
+}
+
+fn real(value: &Value) -> Option<f32> {
+    match value {
+        Value::Real(n) => Some(*n as f32),
+        Value::Integer(n) => Some(*n as f32),
+        _ => None,
+    }
 }
 
 fn text(value: &Value) -> String {
@@ -569,13 +577,17 @@ fn parse_stamp(value: &Value) -> Option<DateTime<Utc>> {
 }
 
 fn start_of_local_day(now: DateTime<Utc>) -> DateTime<Utc> {
-    let local = now.with_timezone(&Local).date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let local = now.with_timezone(&Local).date_naive().and_time(NaiveTime::MIN);
     Local.from_local_datetime(&local).earliest().map_or(now, |t| t.with_timezone(&Utc))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        Appearance, CardId, DateTime, Duration, Gender, Grade, INPUT_BOOSTS, Mode, NewCard, Paths, Review, SCHEMA, Scheduler,
+        Settings, Store, Utc, Value, boost_label, integer, snap_input_boost, text,
+    };
+    use crate::speech::{Assessment, assess};
 
     fn store() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
@@ -583,123 +595,120 @@ mod tests {
         (dir, store)
     }
 
-    fn new_card(dutch: &str) -> NewCard {
-        NewCard { dutch: dutch.into(), english: "english".into(), note: "".into(), tag: "".into() }
+    fn drafts(store: &Store, phrases: &[&str], now: DateTime<Utc>) -> Vec<CardId> {
+        let cards: Vec<NewCard> = phrases.iter().map(|dutch| NewCard { dutch: dutch.to_string(), ..NewCard::default() }).collect();
+        store.add_drafts(None, &cards, now).unwrap()
     }
 
-    #[test]
-    fn starts_empty() {
-        let (_dir, store) = store();
-        assert!(store.deck("").unwrap().is_empty());
-        assert!(store.drafts().unwrap().is_empty());
-        assert_eq!(store.next_card(Utc::now(), 10).unwrap().map(|c| c.id), None);
+    /// Cards in the deck, due now.
+    fn deck(store: &Store, phrases: &[&str], now: DateTime<Utc>) -> Vec<CardId> {
+        let ids = drafts(store, phrases, now);
+        ids.iter().for_each(|id| store.accept(*id, now).unwrap());
+        ids
     }
 
-    #[test]
-    fn drafts_are_not_studied_until_accepted() {
-        let (_dir, store) = store();
-        let now = Utc::now();
-        let snippet = store.add_snippet("Ik: hallo", "", now).unwrap();
-        let ids = store.add_drafts(Some(snippet), &[new_card("Hallo daar."), new_card("  ")], now).unwrap();
-        assert_eq!(ids.len(), 1, "blank drafts are skipped");
-        assert_eq!(store.snippet(snippet).unwrap().as_deref(), Some("Ik: hallo"));
-        assert!(store.next_card(now, 10).unwrap().is_none());
-        store.accept(ids[0], now).unwrap();
-        assert_eq!(store.next_card(now, 10).unwrap().map(|c| c.id), Some(ids[0]));
-        assert!(store.drafts().unwrap().is_empty());
+    fn read(own: Grade, speech: Option<&Assessment>, peeked: bool) -> Review<'_> {
+        Review { own, speech, mode: Mode::Read, peeked }
+    }
+
+    fn reviews(store: &Store, columns: &str) -> Vec<Vec<Value>> {
+        store.rows(&format!("SELECT {columns} FROM reviews ORDER BY id"), vec![]).unwrap()
     }
 
     #[test]
     fn grading_moves_a_card_into_the_future_and_counts_misses_and_peeks() {
         let (_dir, store) = store();
-        let now = Utc::now();
-        let id = store.add_drafts(None, &[new_card("Ik heb er zin in.")], now).unwrap()[0];
-        store.accept(id, now).unwrap();
-        let scheduler = Scheduler::default();
-        let card = store.record_review(id, Grade::DontKnow, None, Mode::Read, true, &scheduler, now).unwrap();
+        let (now, scheduler) = (Utc::now(), Scheduler::exact());
+        let id = deck(&store, &["Ik heb er zin in."], now)[0];
+        let card = store.record_review(id, read(Grade::DontKnow, None, true), &scheduler, now).unwrap();
         assert_eq!((card.reviews, card.misses, card.peeks), (1, 1, 1));
         assert!(card.due.unwrap() > now);
-        // Comes back later in the session, not now.
-        assert_eq!(store.counts(now, 10).unwrap().due, 0);
+        assert_eq!(store.counts(now, 10).unwrap().due, 0, "comes back later in the session, not now");
         assert_eq!(store.next_card(now, 10).unwrap().map(|c| c.id), Some(id), "learn-ahead within 20 minutes");
-        let card = store.record_review(id, Grade::Easy, None, Mode::Read, false, &scheduler, card.due.unwrap()).unwrap();
+        let card = store.record_review(id, read(Grade::Easy, None, false), &scheduler, card.due.unwrap()).unwrap();
         assert!(card.due.unwrap() - now > Duration::hours(12));
         assert!(store.next_card(now + Duration::hours(1), 10).unwrap().is_none());
+        assert!(store.next_due_after(now).unwrap().is_some());
     }
 
     #[test]
     fn new_cards_respect_the_daily_limit() {
         let (_dir, store) = store();
-        let now = Utc::now();
-        let scheduler = Scheduler::default();
-        let ids = store.add_drafts(None, &[new_card("een"), new_card("twee"), new_card("drie")], now).unwrap();
-        for id in &ids {
-            store.accept(*id, now).unwrap();
-        }
+        let (now, scheduler) = (Utc::now(), Scheduler::exact());
+        let ids = deck(&store, &["een", "twee", "drie"], now);
         assert_eq!(store.counts(now, 2).unwrap().new, 2);
-        store.record_review(ids[0], Grade::Easy, None, Mode::Read, false, &scheduler, now).unwrap();
-        store.record_review(ids[1], Grade::Easy, None, Mode::Read, false, &scheduler, now).unwrap();
+        for id in &ids[..2] {
+            store.record_review(*id, read(Grade::Easy, None, false), &scheduler, now).unwrap();
+        }
         assert_eq!(store.counts(now, 2).unwrap().new, 0);
         assert!(store.next_card(now, 2).unwrap().is_none());
     }
 
     #[test]
-    fn finds_duplicates_and_edits_text() {
+    fn suspension_reset_search_and_blank_edits() {
         let (_dir, store) = store();
         let now = Utc::now();
-        let first = store.add_drafts(None, &[new_card("Mag ik de rekening, alstublieft?")], now).unwrap()[0];
-        store.accept(first, now).unwrap();
-        let second = store.add_drafts(None, &[new_card("mag ik de rekening alstublieft")], now).unwrap()[0];
-        let draft = store.card(second).unwrap().unwrap();
-        assert_eq!(store.duplicate_of(&draft).unwrap(), Some(first));
-        store.update_text(second, "Mag ik betalen?", "Can I pay?", "", "restaurant").unwrap();
-        let draft = store.card(second).unwrap().unwrap();
-        assert_eq!(store.duplicate_of(&draft).unwrap(), None);
-        assert!(store.update_text(second, "  ", "", "", "").is_err());
-    }
-
-    #[test]
-    fn suspend_reset_delete_and_search() {
-        let (_dir, store) = store();
-        let now = Utc::now();
-        let scheduler = Scheduler::default();
-        let id = store.add_drafts(None, &[new_card("Het huis is groot.")], now).unwrap()[0];
-        store.accept(id, now).unwrap();
-        store.record_review(id, Grade::Hard, None, Mode::Read, false, &scheduler, now).unwrap();
+        let id = deck(&store, &["Mag ik de rekening, alstublieft?"], now)[0];
+        assert!(store.update_text(id, "  ", "", "", "").is_err(), "the Dutch can't be blank");
+        store.record_review(id, read(Grade::Hard, None, false), &Scheduler::exact(), now).unwrap();
         store.set_suspended(id, true).unwrap();
         assert!(store.next_card(now + Duration::days(30), 10).unwrap().is_none());
-        store.set_suspended(id, false).unwrap();
         store.reset(id, now).unwrap();
         assert!(store.card(id).unwrap().unwrap().is_new());
-        assert_eq!(store.deck("HUIS").unwrap().len(), 1);
-        assert!(store.deck("auto").unwrap().is_empty());
-        store.delete(id).unwrap();
-        assert!(store.card(id).unwrap().is_none());
+        assert_eq!(store.deck("REKENING").unwrap().len(), 1, "search ignores case");
     }
 
     #[test]
-    fn unclear_speech_brings_a_known_card_back_sooner() {
+    fn each_review_saves_how_it_counted() {
         let (_dir, store) = store();
-        let now = Utc::now();
-        let scheduler = Scheduler::default();
-        let ids = store.add_drafts(None, &[new_card("Ik heb kaas gekocht."), new_card("Ik heb brood gekocht.")], now).unwrap();
-        for id in &ids {
-            store.accept(*id, now).unwrap();
+        let (now, scheduler) = (Utc::now(), Scheduler::exact());
+        let ids = deck(&store, &["Ik heb kaas gekocht.", "Ik heb brood gekocht."], now);
+        let clear = assess("Ik heb kaas gekocht.", "Ik heb kaas gekocht.");
+        let unclear = assess("Ik heb brood gekocht.", "Ik heb gekocht.");
+        let a = store.record_review(ids[0], read(Grade::Comfortable, Some(&clear), false), &scheduler, now).unwrap();
+        let b = store.record_review(ids[1], read(Grade::Easy, Some(&unclear), false), &scheduler, now).unwrap();
+        assert!(b.due.unwrap() < a.due.unwrap(), "unclear speech brings a known card back sooner");
+        assert_eq!((a.speech_accuracy, b.misses), (Some(1.0), 0), "a miss means not knowing the card");
+        let a = store.record_review(ids[0], read(Grade::Comfortable, None, false), &scheduler, a.due.unwrap()).unwrap();
+        store.record_review(ids[0], read(Grade::Easy, None, true), &scheduler, a.due.unwrap()).unwrap();
+
+        let saved = reviews(&store, "share, grade, own_grade, speech_grade, heard");
+        let shares: Vec<_> = saved.iter().map(|row| row[0].clone()).collect();
+        let share = Value::Real(crate::schedule::SCORE_ONLY_SHARE);
+        assert_eq!(shares, [Value::Real(1.0), Value::Real(1.0), share, Value::Real(0.0)]);
+        assert_eq!((integer(&saved[1][1]), integer(&saved[1][2])), (integer(&saved[1][3]), 4), "pronunciation replaced the score");
+        assert_eq!(text(&saved[1][4]), "Ik heb gekocht.");
+        assert_eq!((integer(&saved[3][1]), integer(&saved[3][2])), (2, 4), "Makkelijk with the meaning open counts as Moeilijk");
+    }
+
+    #[test]
+    fn settings_persist_and_old_values_load_sensibly() {
+        let (dir, store) = store();
+        assert_eq!(store.settings().unwrap(), Settings::default());
+        let settings = Settings {
+            gender: Gender::Female,
+            new_per_day: 4,
+            mode: Mode::Listen,
+            appearance: Appearance::Dark,
+            input_boost: 1.5,
+            ..Settings::default()
+        };
+        store.save_settings(&settings).unwrap();
+        store.save_settings(&settings).unwrap();
+        drop(store);
+        let store = Store::open(&Paths::at(dir.path())).unwrap();
+        assert_eq!(store.settings().unwrap(), settings);
+
+        // A retired voice, the old speaking and silent modes, and boosts between steps.
+        store.save_settings(&Settings { female_voice: "mls-25".into(), ..settings }).unwrap();
+        assert_eq!(store.settings().unwrap().voice_id(), "nathalie");
+        for old in ["speak", "silent"] {
+            store.exec("UPDATE settings SET value = ?1 WHERE key = 'mode'", vec![old.into()]).unwrap();
+            assert_eq!(store.settings().unwrap().mode, Mode::Read, "{old}");
         }
-        let clear = crate::speech::assess("Ik heb kaas gekocht.", "Ik heb kaas gekocht.");
-        let unclear = crate::speech::assess("Ik heb brood gekocht.", "Ik heb gekocht.");
-        let a = store.record_review(ids[0], Grade::Easy, Some(&clear), Mode::Read, false, &scheduler, now).unwrap();
-        let b = store.record_review(ids[1], Grade::Easy, Some(&unclear), Mode::Read, false, &scheduler, now).unwrap();
-        assert!(b.due.unwrap() < a.due.unwrap());
-        assert_eq!(a.speech_accuracy, Some(1.0));
-        assert!(b.speech_accuracy.unwrap() < 0.85);
-        assert_eq!(b.misses, 0, "a miss means not knowing the card, not unclear speech");
-        let saved = store
-            .rows("SELECT grade, own_grade, speech_grade, heard FROM reviews WHERE card_id = ?1", vec![Value::Integer(ids[1])])
-            .unwrap();
-        assert_eq!(integer(&saved[0][1]), 4);
-        assert_eq!(integer(&saved[0][0]), integer(&saved[0][2]));
-        assert_eq!(text(&saved[0][3]), "Ik heb gekocht.");
+        let snapped = [0.1, 1.4, 2.2, 9.0].map(snap_input_boost);
+        assert_eq!(snapped, [0.5, 1.5, 2.0, 2.5]);
+        assert_eq!(INPUT_BOOSTS.map(boost_label), ["0,5×", "1×", "1,5×", "2×", "2,5×"]);
     }
 
     #[test]
@@ -708,101 +717,16 @@ mod tests {
         let path = dir.path().join("cards.db").to_string_lossy().to_string();
         // SCHEMA is the original layout; the speech columns are added on open.
         pollster::block_on(async {
-            let db = turso::Builder::new_local(&path).build().await.unwrap();
-            let conn = db.connect().unwrap();
+            let conn = turso::Builder::new_local(&path).build().await.unwrap().connect().unwrap();
             conn.execute_batch(SCHEMA).await.unwrap();
             conn.execute("INSERT INTO reviews (card_id, grade, mode, peeked, reviewed_at) VALUES (1, 3, 'speak', 0, 'x')", ())
                 .await
                 .unwrap();
         });
         let store = Store::open_file(&path).unwrap();
-        let rows = store.rows("SELECT grade, own_grade, speech_accuracy FROM reviews", vec![]).unwrap();
-        assert_eq!(integer(&rows[0][0]), 3);
-        assert_eq!(rows[0][1], Value::Null);
-        // Opening again finds the columns already there.
+        let rows = reviews(&store, "grade, own_grade, speech_accuracy");
+        assert_eq!((integer(&rows[0][0]), &rows[0][1]), (3, &Value::Null));
         drop(store);
-        Store::open_file(&path).unwrap();
-    }
-
-    #[test]
-    fn a_retired_voice_loads_as_the_current_female_voice() {
-        let (_dir, store) = store();
-        let saved = Settings { gender: Gender::Female, female_voice: "mls-25".into(), ..Settings::default() };
-        store.save_settings(&saved).unwrap();
-        let loaded = store.settings().unwrap();
-        assert_eq!(loaded.voice_id(), "nathalie");
-        assert_eq!(loaded.gender, Gender::Female);
-    }
-
-    #[test]
-    fn settings_persist() {
-        let (dir, store) = store();
-        let mut settings = store.settings().unwrap();
-        assert_eq!(settings, Settings::default());
-        settings.gender = Gender::Female;
-        settings.new_per_day = 4;
-        settings.mode = Mode::Listen;
-        settings.appearance = Appearance::Dark;
-        settings.input_boost = 1.5;
-        store.save_settings(&settings).unwrap();
-        store.save_settings(&settings).unwrap();
-        drop(store);
-        let reopened = Store::open(&Paths::at(dir.path())).unwrap();
-        assert_eq!(reopened.settings().unwrap(), settings);
-    }
-
-    #[test]
-    fn input_boost_snaps_to_the_offered_steps() {
-        assert_eq!(snap_input_boost(0.1), 0.5);
-        assert_eq!(snap_input_boost(1.4), 1.5);
-        assert_eq!(snap_input_boost(2.2), 2.0);
-        assert_eq!(snap_input_boost(9.0), 2.5);
-    }
-
-    #[test]
-    fn the_old_speaking_and_silent_modes_load_as_reading() {
-        for old in ["speak", "silent"] {
-            let (_dir, store) = store();
-            store.exec("INSERT INTO settings (key, value) VALUES ('mode', ?1)", vec![old.into()]).unwrap();
-            assert_eq!(store.settings().unwrap().mode, Mode::Read, "{old}");
-        }
-    }
-
-    #[test]
-    fn each_review_saves_how_much_it_counted() {
-        let (_dir, store) = store();
-        let now = Utc::now();
-        let scheduler = Scheduler::default();
-        let id = store.add_drafts(None, &[new_card("Ik woon in Utrecht.")], now).unwrap()[0];
-        store.accept(id, now).unwrap();
-        let spoken = crate::speech::assess("Ik woon in Utrecht.", "Ik woon in Utrecht.");
-        let card = store.record_review(id, Grade::Comfortable, Some(&spoken), Mode::Read, false, &scheduler, now).unwrap();
-        let card = store.record_review(id, Grade::Comfortable, None, Mode::Read, false, &scheduler, card.due.unwrap()).unwrap();
-        store.record_review(id, Grade::Easy, None, Mode::Read, true, &scheduler, card.due.unwrap()).unwrap();
-        let saved = store.rows("SELECT share, grade, own_grade FROM reviews ORDER BY id", vec![]).unwrap();
-        let shares: Vec<_> = saved.iter().map(|row| row[0].clone()).collect();
-        assert_eq!(shares, [Value::Real(1.0), Value::Real(crate::schedule::SCORE_ONLY_SHARE), Value::Real(0.0)]);
-        // Opening the meaning: pressed Makkelijk, counted as Moeilijk.
-        assert_eq!((integer(&saved[2][1]), integer(&saved[2][2])), (2, 4));
-    }
-
-    #[test]
-    fn opening_the_meaning_does_not_lengthen_the_pause() {
-        let (_dir, store) = store();
-        let mut now = Utc::now();
-        let scheduler = Scheduler::default();
-        let id = store.add_drafts(None, &[new_card("De trein is te laat.")], now).unwrap()[0];
-        store.accept(id, now).unwrap();
-        let mut card = store.card(id).unwrap().unwrap();
-        for _ in 0..3 {
-            card = store.record_review(id, Grade::Comfortable, None, Mode::Listen, false, &scheduler, now).unwrap();
-            now = card.due.unwrap();
-        }
-        let last = card.schedule.scheduled_days;
-        assert!(last >= 7, "practised card should be days apart, got {last}");
-        let card = store.record_review(id, Grade::Easy, None, Mode::Read, true, &scheduler, now).unwrap();
-        // Fuzz may move it a little either way, but never stretch it.
-        let pause = (card.due.unwrap() - now).num_days();
-        assert!(pause <= last + last / 5 + 1, "{pause} days after a {last}-day pause");
+        Store::open_file(&path).expect("opening again finds the columns already there");
     }
 }

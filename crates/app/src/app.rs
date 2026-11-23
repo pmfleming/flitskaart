@@ -2,24 +2,24 @@
 
 use std::time::Duration;
 
-use chrono::Utc;
-use dutch_flashcards_core::paths::Paths;
-use dutch_flashcards_core::schedule::Scheduler;
-use dutch_flashcards_core::speech::Listener;
-use dutch_flashcards_core::store::{Appearance, INPUT_BOOSTS, Settings};
-use dutch_flashcards_core::voice::{self, Speaker, Speed, VoiceOption};
 use dutch_flashcards_core::Store;
-use gpui_kit::component::slider::{SliderEvent, SliderState};
-use gpui_kit::component::tab::{Tab, TabBar};
+use dutch_flashcards_core::paths::Paths;
+use dutch_flashcards_core::speech::Listener;
+use dutch_flashcards_core::store::{Appearance, Settings};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
-use gpui_kit::*;
+use gpui_kit::{
+    Context, IntoElement, ParentElement as _, Render, ScrollHandle, SharedString, Styled as _,
+    Subscription, Window, div,
+};
 
 use crate::add::AddState;
-use crate::audio::Audio;
+use crate::audio::Sound;
 use crate::deck::DeckState;
 use crate::drafts::DraftRow;
+use crate::mic_test::MicTest;
 use crate::study::StudyState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,16 +32,16 @@ pub enum Screen {
 }
 
 impl Screen {
-    const ALL: [Screen; 5] = [Screen::Study, Screen::Add, Screen::Drafts, Screen::Deck, Screen::Settings];
+    pub const ALL: [Screen; 5] = [Screen::Study, Screen::Add, Screen::Drafts, Screen::Deck, Screen::Settings];
+    const LABELS: [&str; 5] = ["Oefenen", "Toevoegen", "Concepten", "Kaarten", "Instellingen"];
 
-    fn label(self) -> &'static str {
-        match self {
-            Screen::Study => "Oefenen",
-            Screen::Add => "Toevoegen",
-            Screen::Drafts => "Concepten",
-            Screen::Deck => "Kaarten",
-            Screen::Settings => "Instellingen",
-        }
+    pub fn label(self) -> &'static str {
+        Screen::LABELS[self as usize]
+    }
+
+    /// The screen with this label, ignoring case.
+    pub fn named(name: &str) -> Option<Screen> {
+        Screen::ALL.into_iter().find(|screen| screen.label().eq_ignore_ascii_case(name))
     }
 }
 
@@ -53,31 +53,21 @@ pub struct Notice {
 
 pub struct FlashcardsApp {
     pub store: Store,
-    pub scheduler: Scheduler,
-    pub speaker: Speaker,
     pub listener: Listener,
     /// A WAV file used in place of the microphone (`--recording`), for checks.
     pub fake_recording: Option<std::path::PathBuf>,
     pub settings: Settings,
     pub paths: Paths,
-    pub audio: Audio,
+    pub sound: Sound,
     pub screen: Screen,
     pub study: StudyState,
-    pub mic_test: crate::mic_test::MicTest,
+    pub mic_test: MicTest,
     /// Instellingen scrolls; the microphone test brings its result into view.
     pub settings_scroll: ScrollHandle,
-    /// The input boost slider in Instellingen.
-    pub boost_slider: Entity<SliderState>,
-    _boost_changed: Subscription,
     pub add: AddState,
     pub drafts: Vec<DraftRow>,
     pub deck: DeckState,
-    pub deck_query: String,
     pub notice: Option<Notice>,
-    /// Bumped on every playback so a finished sound only clears its own indicator.
-    playback: u64,
-    pub playing: bool,
-    pub preparing_audio: bool,
     _appearance_changed: Subscription,
 }
 
@@ -90,34 +80,22 @@ impl FlashcardsApp {
                 Theme::sync_system_appearance(Some(window), cx);
             }
         });
-        let boost_slider = cx.new(|_| {
-            SliderState::new().min(INPUT_BOOSTS[0]).max(INPUT_BOOSTS[INPUT_BOOSTS.len() - 1]).step(0.5).default_value(settings.input_boost)
-        });
-        let boost_changed = cx.subscribe(&boost_slider, |this, _, event: &SliderEvent, cx| this.boost_slider_moved(event, cx));
         let mut app = FlashcardsApp {
-            _appearance_changed: appearance_changed,
-            scheduler: Scheduler::default(),
-            speaker: Speaker::new(&paths),
+            sound: Sound::new(&paths),
             listener: Listener::new(&paths),
             fake_recording: None,
             study: StudyState::new(settings.mode, cx),
-            mic_test: Default::default(),
+            mic_test: MicTest::new(settings.input_boost, cx),
             settings_scroll: ScrollHandle::new(),
-            boost_slider,
-            _boost_changed: boost_changed,
             add: AddState::new(window, cx),
             deck: DeckState::new(window, cx),
-            deck_query: String::new(),
             drafts: Vec::new(),
             settings,
             store,
             paths,
-            audio: Audio::default(),
             screen: Screen::Study,
             notice: None,
-            playback: 0,
-            playing: false,
-            preparing_audio: false,
+            _appearance_changed: appearance_changed,
         };
         app.apply_appearance(window, cx);
         app.reload_drafts(window, cx);
@@ -131,20 +109,20 @@ impl FlashcardsApp {
         self.screen = screen;
         self.notice = None;
         match screen {
-            Screen::Study => {
-                if self.study.card.is_none() {
-                    self.load_next_card(cx);
-                }
-                self.study.focus.focus(window, cx);
-            }
+            Screen::Study if self.study.card.is_none() => self.load_next_card(cx),
             Screen::Deck => self.reload_deck(),
             Screen::Settings => self.refresh_inputs(cx),
-            Screen::Add => self.add.snippet.focus_handle(cx).focus(window, cx),
+            _ => {}
+        }
+        match screen {
+            Screen::Study => self.study.focus.focus(window, cx),
+            Screen::Add => self.add.focus(window, cx),
             _ => {}
         }
         cx.notify();
     }
 
+    /// Shows an error across the bottom of the window, and logs it.
     pub fn error(&mut self, text: impl std::fmt::Display) {
         let text = crate::logging::error(self.screen.label(), text);
         self.notice = Some(Notice { text: text.into(), is_error: true });
@@ -154,8 +132,9 @@ impl FlashcardsApp {
         self.notice = Some(Notice { text: text.into(), is_error: false });
     }
 
-    pub fn current_voice(&self) -> &'static VoiceOption {
-        voice::voice(self.settings.voice_id())
+    /// Whether a recording or Whisper is busy, in Oefenen or the microphone test.
+    pub fn busy(&self) -> bool {
+        self.busy_listening() || self.mic_test.is_busy()
     }
 
     /// Applies the light/dark setting to the window.
@@ -173,90 +152,56 @@ impl FlashcardsApp {
         }
     }
 
-    /// Speaks `text` with `voice`: generates the audio in the background if it
-    /// is not cached yet, then plays it.
-    pub fn speak(&mut self, text: String, voice: &'static VoiceOption, speed: Speed, cx: &mut Context<Self>) {
-        let speaker = self.speaker.clone();
-        self.preparing_audio = !speaker.audio_path(&text, voice, speed).exists();
-        self.playback += 1;
-        let ticket = self.playback;
-        cx.notify();
-        let job = cx.background_executor().spawn(async move { speaker.speech(&text, voice, speed) });
+    /// Runs `job` off the UI thread, then hands its result to `then` back on it.
+    pub fn in_background<T: Send + 'static>(
+        &self,
+        cx: &mut Context<Self>,
+        job: impl FnOnce() -> T + Send + 'static,
+        then: impl FnOnce(&mut Self, T, &mut Context<Self>) + 'static,
+    ) {
+        let task = cx.background_executor().spawn(async move { job() });
         cx.spawn(async move |this, cx| {
-            let result = job.await;
-            let finished = this.update(cx, |this, cx| {
-                this.preparing_audio = false;
-                if this.playback != ticket {
-                    return None;
-                }
-                let played = result.and_then(|path| this.audio.play(&path));
-                let length = match played {
-                    Ok(length) => length,
-                    Err(err) => {
-                        this.error(format!("{err:#}"));
-                        cx.notify();
-                        return None;
-                    }
-                };
-                this.playing = true;
+            let value = task.await;
+            let _ = this.update(cx, |this, cx| {
+                then(this, value, cx);
                 cx.notify();
-                Some(cx.background_executor().timer(length + Duration::from_millis(150)))
             });
-            if let Ok(Some(timer)) = finished {
-                timer.await;
-                let _ = this.update(cx, |this, cx| {
-                    if this.playback == ticket {
-                        this.playing = false;
-                        cx.notify();
-                    }
-                });
-            }
         })
         .detach();
     }
 
-    /// Generates audio ahead of time so playback starts instantly later.
-    pub fn prepare_audio(&self, text: String, cx: &mut Context<Self>) {
-        let speaker = self.speaker.clone();
-        let voice = self.current_voice();
-        cx.background_executor()
-            .spawn(async move {
-                let _ = speaker.speech(&text, voice, Speed::Normal);
-            })
-            .detach();
+    /// Runs `then` after `delay`.
+    pub fn after(&self, delay: Duration, cx: &mut Context<Self>, then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static) {
+        let timer = cx.background_executor().timer(delay);
+        cx.spawn(async move |this, cx| {
+            timer.await;
+            let _ = this.update(cx, |this, cx| {
+                then(this, cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
-    pub fn stop_audio(&mut self) {
-        self.playback += 1;
-        self.playing = false;
-        self.audio.stop();
+    pub fn now() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc::now()
     }
 
     fn render_tabs(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = Screen::ALL.iter().position(|s| *s == self.screen).unwrap_or(0);
-        let draft_count = self.drafts.len();
+        let drafts = self.drafts.len();
+        let theme = cx.theme().clone();
         TabBar::new("screens")
             .underline()
             .selected_index(selected)
-            .on_click(cx.listener(|this, index: &usize, window, cx| {
-                this.show(Screen::ALL[*index], window, cx);
-            }))
+            .on_click(cx.listener(|this, index: &usize, window, cx| this.show(Screen::ALL[*index], window, cx)))
             .children(Screen::ALL.map(|screen| {
                 let tab = Tab::new().label(screen.label());
-                if screen == Screen::Drafts && draft_count > 0 {
-                    tab.suffix(
-                        div()
-                            .ml_1()
-                            .px_1p5()
-                            .rounded_full()
-                            .bg(cx.theme().primary)
-                            .text_color(cx.theme().primary_foreground)
-                            .text_xs()
-                            .child(draft_count.to_string()),
-                    )
-                } else {
-                    tab
+                if screen != Screen::Drafts || drafts == 0 {
+                    return tab;
                 }
+                let badge = div().ml_1().px_1p5().rounded_full().bg(theme.primary).text_color(theme.primary_foreground);
+                tab.suffix(badge.text_xs().child(drafts.to_string()))
             }))
     }
 
@@ -273,70 +218,22 @@ impl FlashcardsApp {
                 .border_color(theme.border)
                 .bg(theme.secondary)
                 .child(div().flex_1().text_sm().text_color(color).child(notice.text.clone()))
-                .child(
-                    Button::new("dismiss-notice")
-                        .label("Sluiten")
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.notice = None;
-                            cx.notify();
-                        })),
-                ),
+                .child(Button::new("dismiss-notice").label("Sluiten").small().ghost().on_click(cx.listener(|this, _, _, cx| {
+                    this.notice = None;
+                    cx.notify();
+                }))),
         )
-    }
-
-    pub fn now() -> chrono::DateTime<Utc> {
-        Utc::now()
-    }
-
-    /// Opens a screen and replays study keys, for screenshots and checks.
-    pub fn replay(&mut self, screen: Option<&str>, keys: &[String], window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(name) = screen {
-            match Screen::ALL.iter().find(|s| s.label().eq_ignore_ascii_case(name)) {
-                Some(screen) => self.show(*screen, window, cx),
-                None => self.error(format!("Onbekend scherm: {name}")),
-            }
-        }
-        self.replay_keys(keys.to_vec(), window, cx);
-    }
-
-    /// Replays study keys (on Instellingen, `microfoon` runs the microphone test);
-    /// `wacht` waits until recording and listening are done.
-    fn replay_keys(&mut self, mut keys: Vec<String>, window: &mut Window, cx: &mut Context<Self>) {
-        while !keys.is_empty() {
-            let key = keys.remove(0);
-            if key == "wacht" {
-                cx.spawn_in(window, async move |this, cx| {
-                    loop {
-                        cx.background_executor().timer(Duration::from_millis(100)).await;
-                        let busy = this.update(cx, |this, _| this.busy_listening() || this.mic_test.is_busy()).unwrap_or(false);
-                        if !busy {
-                            break;
-                        }
-                    }
-                    let _ = this.update_in(cx, |this, window, cx| this.replay_keys(keys, window, cx));
-                })
-                .detach();
-                return;
-            }
-            if self.screen == Screen::Study {
-                self.study_key(&key, window, cx);
-            } else if self.screen == Screen::Settings && key == "microfoon" {
-                self.start_mic_test(cx);
-            }
-        }
     }
 }
 
 impl Render for FlashcardsApp {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = match self.screen {
-            Screen::Study => self.render_study(window, cx).into_any_element(),
-            Screen::Add => self.render_add(window, cx).into_any_element(),
-            Screen::Drafts => self.render_drafts(window, cx).into_any_element(),
-            Screen::Deck => self.render_deck(window, cx).into_any_element(),
-            Screen::Settings => self.render_settings(window, cx).into_any_element(),
+            Screen::Study => self.render_study(cx).into_any_element(),
+            Screen::Add => self.render_add(cx).into_any_element(),
+            Screen::Drafts => self.render_drafts(cx).into_any_element(),
+            Screen::Deck => self.render_deck(cx).into_any_element(),
+            Screen::Settings => self.render_settings(cx).into_any_element(),
         };
         let theme = cx.theme();
         v_flex()

@@ -4,7 +4,7 @@
 use std::io::Write as _;
 use std::process::{Command, Stdio};
 
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, bail};
 
 use crate::model::NewCard;
 
@@ -81,7 +81,7 @@ pub fn parse_manual(text: &str) -> Option<Vec<NewCard>> {
 }
 
 /// The text sent to Claude for one snippet.
-pub fn request_text(snippet: &str, steer: &str, limit: usize) -> String {
+fn request_text(snippet: &str, steer: &str, limit: usize) -> String {
     let steer = steer.trim();
     let mut out = format!("Make at most {limit} cards.\n");
     if !steer.is_empty() {
@@ -99,7 +99,7 @@ pub fn draft_cards(snippet: &str, steer: &str, limit: usize) -> Result<Vec<NewCa
     if snippet.trim().is_empty() {
         bail!("Plak eerst een stuk van een gesprek.");
     }
-    let claude = std::env::var("DUTCH_FLASHCARDS_CLAUDE").unwrap_or_else(|_| "claude".into());
+    let claude = crate::paths::program("DUTCH_FLASHCARDS_CLAUDE", "claude");
     let model = std::env::var("DUTCH_FLASHCARDS_MODEL").unwrap_or_else(|_| "sonnet".into());
     // Run outside any project so no project instructions are picked up.
     let workdir = std::env::temp_dir();
@@ -112,32 +112,28 @@ pub fn draft_cards(snippet: &str, steer: &str, limit: usize) -> Result<Vec<NewCa
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("Claude Code ({claude}) kon niet starten. Is het geïnstalleerd en ben je ingelogd?"))?;
-    child.stdin.take().unwrap().write_all(request_text(snippet, steer, limit).as_bytes())?;
+        .with_context(|| format!("Claude Code ({}) kon niet starten. Is het geïnstalleerd en ben je ingelogd?", claude.display()))?;
+    child.stdin.take().context("Claude Code nam geen tekst aan")?.write_all(request_text(snippet, steer, limit).as_bytes())?;
     let output = child.wait_with_output()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     if !output.status.success() && stdout.trim().is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("Claude Code gaf een fout: {}", stderr.lines().last().unwrap_or("onbekend"));
+        bail!("Claude Code gaf een fout: {}", crate::voice::last_line(&output.stderr));
     }
     parse_reply(&stdout, limit)
 }
 
 /// Reads Claude Code's `--output-format json` envelope.
-pub fn parse_reply(stdout: &str, limit: usize) -> Result<Vec<NewCard>> {
-    let envelope: serde_json::Value =
+fn parse_reply(stdout: &str, limit: usize) -> Result<Vec<NewCard>> {
+    let mut envelope: serde_json::Value =
         serde_json::from_str(stdout.trim()).context("Claude Code gaf geen leesbaar antwoord")?;
-    if envelope.get("is_error").and_then(|v| v.as_bool()) == Some(true) {
-        let message = envelope.get("result").and_then(|v| v.as_str()).unwrap_or("onbekende fout");
-        return Err(anyhow!("Claude Code gaf een fout: {message}"));
+    // Older Claude Code versions put the cards in the result text instead.
+    let structured = envelope["structured_output"].take();
+    let result = envelope["result"].as_str().unwrap_or_default();
+    if envelope["is_error"].as_bool() == Some(true) {
+        bail!("Claude Code gaf een fout: {}", if result.is_empty() { "onbekende fout" } else { result });
     }
-    let structured = match envelope.get("structured_output") {
-        Some(value) if !value.is_null() => value.clone(),
-        _ => {
-            let result = envelope.get("result").and_then(|v| v.as_str()).unwrap_or_default();
-            serde_json::from_str(result).context("Claude Code gaf geen kaarten terug")?
-        }
-    };
+    let structured =
+        if structured.is_null() { serde_json::from_str(result).context("Claude Code gaf geen kaarten terug")? } else { structured };
     let reply: Reply = serde_json::from_value(structured).context("Claude Code gaf kaarten in een onverwachte vorm")?;
     let mut seen = std::collections::HashSet::new();
     Ok(reply
@@ -151,7 +147,7 @@ pub fn parse_reply(stdout: &str, limit: usize) -> Result<Vec<NewCard>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{parse_manual, parse_reply, request_text};
 
     #[test]
     fn manual_lines_become_cards() {
@@ -170,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_structured_output_and_drops_duplicates() {
+    fn reads_claude_codes_reply() {
         let stdout = r#"{"type":"result","is_error":false,"result":"","structured_output":{"cards":[
             {"dutch":"Ik woon al drie jaar in Utrecht.","english":"I have lived in Utrecht for three years.","note":"Met al: tegenwoordige tijd.","tag":"grammatica"},
             {"dutch":"ik woon al drie jaar in utrecht","english":"dup","note":"","tag":""},
@@ -178,16 +174,9 @@ mod tests {
         let cards = parse_reply(stdout, 6).unwrap();
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].tag, "grammatica");
-    }
-
-    #[test]
-    fn falls_back_to_the_result_text_and_respects_the_limit() {
+        // The cards may come in the result text instead; the limit holds.
         let stdout = r#"{"is_error":false,"result":"{\"cards\":[{\"dutch\":\"een\",\"english\":\"one\",\"note\":\"\",\"tag\":\"\"},{\"dutch\":\"twee\",\"english\":\"two\",\"note\":\"\",\"tag\":\"\"}]}"}"#;
         assert_eq!(parse_reply(stdout, 1).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn reports_errors() {
         assert!(parse_reply(r#"{"is_error":true,"result":"Not logged in"}"#, 6).unwrap_err().to_string().contains("Not logged in"));
         assert!(parse_reply("not json", 6).is_err());
     }

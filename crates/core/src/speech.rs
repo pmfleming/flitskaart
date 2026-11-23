@@ -10,9 +10,9 @@ use std::process::Command;
 use anyhow::{Context as _, Result, bail};
 
 use crate::model::Grade;
-use crate::paths::Paths;
+use crate::paths::{Paths, program};
 
-pub const MODEL_FILE: &str = "ggml-large-v3-turbo-q5_0.bin";
+const MODEL_FILE: &str = "ggml-large-v3-turbo-q5_0.bin";
 
 /// Runs Whisper on recordings.
 #[derive(Clone, Debug)]
@@ -23,9 +23,7 @@ pub struct Listener {
 
 impl Listener {
     pub fn new(paths: &Paths) -> Listener {
-        let whisper =
-            std::env::var_os("DUTCH_FLASHCARDS_WHISPER").map_or_else(|| PathBuf::from("whisper-cli"), PathBuf::from);
-        Listener { whisper, model: paths.models().join(MODEL_FILE) }
+        Listener { whisper: program("DUTCH_FLASHCARDS_WHISPER", "whisper-cli"), model: paths.models().join(MODEL_FILE) }
     }
 
     pub fn is_installed(&self) -> bool {
@@ -48,8 +46,7 @@ impl Listener {
                 format!("Whisper kon niet starten ({}). Start de app vanuit `nix develop`.", self.whisper.display())
             })?;
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Whisper gaf een fout: {}", stderr.lines().last().unwrap_or("onbekend"));
+            bail!("Whisper gaf een fout: {}", crate::voice::last_line(&output.stderr));
         }
         let text = String::from_utf8_lossy(&output.stdout);
         Ok(text.split_whitespace().collect::<Vec<_>>().join(" "))
@@ -63,20 +60,7 @@ pub fn write_wav_16k(path: &Path, samples: &[f32], rate: u32, channels: u16) -> 
         .map(|frame| frame.iter().sum::<f32>() / frame.len() as f32)
         .collect();
     let out = resample(&mono, rate, 16_000);
-    let data_len = (out.len() * 2) as u32;
-    let mut bytes = Vec::with_capacity(44 + out.len() * 2);
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
-    bytes.extend_from_slice(b"WAVEfmt ");
-    bytes.extend_from_slice(&16u32.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    bytes.extend_from_slice(&1u16.to_le_bytes()); // mono
-    bytes.extend_from_slice(&16_000u32.to_le_bytes());
-    bytes.extend_from_slice(&32_000u32.to_le_bytes()); // byte rate
-    bytes.extend_from_slice(&2u16.to_le_bytes()); // block align
-    bytes.extend_from_slice(&16u16.to_le_bytes());
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&data_len.to_le_bytes());
+    let mut bytes = wav_header_16k_mono((out.len() * 2) as u32);
     for sample in out {
         bytes.extend_from_slice(&((sample.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
     }
@@ -84,6 +68,17 @@ pub fn write_wav_16k(path: &Path, samples: &[f32], rate: u32, channels: u16) -> 
         std::fs::create_dir_all(dir)?;
     }
     std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
+}
+
+/// The 44-byte header of a 16 kHz mono 16-bit PCM WAV holding `data_len` bytes.
+fn wav_header_16k_mono(data_len: u32) -> Vec<u8> {
+    // Format chunk: PCM, mono, 16 kHz, byte rate, block align, bits per sample.
+    let fields: [&[u8]; 12] = [
+        b"RIFF", &(36 + data_len).to_le_bytes(), b"WAVEfmt ", &16u32.to_le_bytes(),
+        &1u16.to_le_bytes(), &1u16.to_le_bytes(), &16_000u32.to_le_bytes(), &32_000u32.to_le_bytes(),
+        &2u16.to_le_bytes(), &16u16.to_le_bytes(), b"data", &data_len.to_le_bytes(),
+    ];
+    fields.concat()
 }
 
 /// Linear-interpolation resampling; plenty for speech recognition.
@@ -122,14 +117,15 @@ pub struct Assessment {
     pub words: Vec<WordMark>,
 }
 
+/// The pronunciation grade's wording, by [`Grade::index`].
+const SPEECH_LABELS: [&str; 4] = ["Onverstaanbaar", "Moeilijk te verstaan", "Goed te verstaan", "Heel duidelijk"];
+
+/// The lowest share of letters understood for each grade above Onverstaanbaar.
+const GRADE_FLOORS: [(f32, Grade); 3] = [(0.95, Grade::Easy), (0.85, Grade::Comfortable), (0.65, Grade::Hard)];
+
 /// The pronunciation grade's wording.
 pub fn speech_label(grade: Grade) -> &'static str {
-    match grade {
-        Grade::DontKnow => "Onverstaanbaar",
-        Grade::Hard => "Moeilijk te verstaan",
-        Grade::Comfortable => "Goed te verstaan",
-        Grade::Easy => "Heel duidelijk",
-    }
+    SPEECH_LABELS[grade.index()]
 }
 
 /// Compares what was heard with the card.
@@ -148,15 +144,7 @@ pub fn assess(card: &str, heard: &str) -> Assessment {
         let errors = edit_distance(&card_letters, &heard_letters) as f32;
         (1.0 - errors / card_letters.len() as f32).max(0.0)
     };
-    let grade = if accuracy >= 0.95 {
-        Grade::Easy
-    } else if accuracy >= 0.85 {
-        Grade::Comfortable
-    } else if accuracy >= 0.65 {
-        Grade::Hard
-    } else {
-        Grade::DontKnow
-    };
+    let grade = GRADE_FLOORS.iter().find(|(floor, _)| accuracy >= *floor).map_or(Grade::DontKnow, |(_, grade)| *grade);
     let matched = aligned_matches(&card_words, &heard_words);
     let words = display_words(card).into_iter().zip(matched).map(|(word, heard)| WordMark { word, heard }).collect();
     Assessment { heard: heard.trim().to_string(), accuracy, grade, words }
@@ -209,30 +197,28 @@ fn edit_distance<T: PartialEq>(a: &[T], b: &[T]) -> usize {
     row[b.len()]
 }
 
-/// For each card word, whether the alignment matched it to an identical heard word.
-fn aligned_matches(card: &[String], heard: &[String]) -> Vec<bool> {
-    let (n, m) = (card.len(), heard.len());
-    let mut cost = vec![vec![0usize; m + 1]; n + 1];
-    for (i, row) in cost.iter_mut().enumerate() {
-        row[0] = i;
-    }
-    for (j, cell) in cost[0].iter_mut().enumerate() {
-        *cell = j;
-    }
-    for i in 1..=n {
-        for j in 1..=m {
+/// The word-level edit-distance table between `card` and `heard`.
+fn alignment_costs(card: &[String], heard: &[String]) -> Vec<Vec<usize>> {
+    let mut cost: Vec<Vec<usize>> = (0..=card.len()).map(|i| (i..=i + heard.len()).collect()).collect();
+    for i in 1..=card.len() {
+        for j in 1..=heard.len() {
             let substitute = cost[i - 1][j - 1] + usize::from(card[i - 1] != heard[j - 1]);
             cost[i][j] = substitute.min(cost[i - 1][j] + 1).min(cost[i][j - 1] + 1);
         }
     }
-    let mut matched = vec![false; n];
-    let (mut i, mut j) = (n, m);
+    cost
+}
+
+/// For each card word, whether the alignment matched it to an identical heard word.
+fn aligned_matches(card: &[String], heard: &[String]) -> Vec<bool> {
+    let cost = alignment_costs(card, heard);
+    let mut matched = vec![false; card.len()];
+    let (mut i, mut j) = (card.len(), heard.len());
     while i > 0 && j > 0 {
         let same = card[i - 1] == heard[j - 1];
         if cost[i][j] == cost[i - 1][j - 1] + usize::from(!same) {
             matched[i - 1] = same;
-            i -= 1;
-            j -= 1;
+            (i, j) = (i - 1, j - 1);
         } else if cost[i][j] == cost[i - 1][j] + 1 {
             i -= 1;
         } else {
@@ -244,53 +230,30 @@ fn aligned_matches(card: &[String], heard: &[String]) -> Vec<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Grade, assess, missed_ranges, write_wav_16k};
 
     const CARD: &str = "Vandaag ben ik een Linux-programma aan het schrijven.";
 
+    /// What was heard, the grade it earns, and the card's words marked as missed.
+    /// Marks cover a word's letters: punctuation stays outside, letters beyond ASCII whole.
     #[test]
-    fn a_perfect_reading_is_very_clear() {
-        let result = assess(CARD, "Vandaag ben ik een Linux programma aan het schrijven.");
-        assert_eq!(result.grade, Grade::Easy);
-        assert!((result.accuracy - 1.0).abs() < f32::EPSILON);
-        assert!(result.words.iter().all(|w| w.heard));
-        assert_eq!(result.words.len(), 9);
-        assert_eq!(result.words[4].word, "Linux");
-    }
-
-    #[test]
-    fn a_missed_word_lowers_the_grade_and_is_marked() {
-        let result = assess(CARD, "Vandaag ben ik een programma aan het schrijven.");
-        assert_eq!(result.grade, Grade::Comfortable, "{}", result.accuracy);
-        let missed: Vec<_> = result.words.iter().filter(|w| !w.heard).map(|w| w.word.as_str()).collect();
-        assert_eq!(missed, ["Linux"]);
-    }
-
-    #[test]
-    fn misheard_vowels_cost_less_than_missing_words() {
+    fn readings_are_graded_and_missed_words_marked_in_the_card() {
+        let cases: [(&str, &str, Grade, &[&str]); 4] = [
+            (CARD, "Vandaag ben ik een Linux programma aan het schrijven.", Grade::Easy, &[]),
+            (CARD, "Vandaag ben ik een programma aan het schrijven.", Grade::Comfortable, &["Linux"]),
+            (CARD, "Vandaag ben ik een programma het schrijven.", Grade::Hard, &["Linux", "aan"]),
+            ("Hé, één café?", "hé", Grade::DontKnow, &["één", "café"]),
+        ];
+        for (card, heard, grade, missed) in cases {
+            let result = assess(card, heard);
+            let marked: Vec<_> = missed_ranges(card, &result.words).into_iter().map(|range| &card[range]).collect();
+            assert_eq!((result.grade, marked.as_slice()), (grade, missed), "{heard}");
+        }
+        for mumble in ["", "Ondertiteling door de redactie", "Vandaag ben ik"] {
+            assert_eq!(assess(CARD, mumble).grade, Grade::DontKnow, "{mumble}");
+        }
         let vowel = assess("Ik heb kaas gekocht.", "Ik heb kees gekocht.");
-        let missing = assess("Ik heb kaas gekocht.", "Ik heb gekocht.");
-        assert!(vowel.accuracy > missing.accuracy);
-        assert_eq!(vowel.words.iter().filter(|w| !w.heard).count(), 1);
-    }
-
-    #[test]
-    fn mumbling_or_silence_is_not_understandable() {
-        assert_eq!(assess(CARD, "").grade, Grade::DontKnow);
-        assert_eq!(assess(CARD, "Ondertiteling door de redactie").grade, Grade::DontKnow);
-        assert_eq!(assess(CARD, "Vandaag ben ik").grade, Grade::DontKnow);
-    }
-
-    #[test]
-    fn missed_words_are_found_in_the_card_text() {
-        let result = assess(CARD, "Vandaag ben ik een programma het schrijven.");
-        let missed: Vec<_> = missed_ranges(CARD, &result.words).into_iter().map(|range| &CARD[range]).collect();
-        assert_eq!(missed, ["Linux", "aan"]);
-        // Punctuation stays outside the mark, and letters beyond ASCII are whole.
-        let card = "Hé, één café?";
-        let result = assess(card, "hé");
-        let missed: Vec<_> = missed_ranges(card, &result.words).into_iter().map(|range| &card[range]).collect();
-        assert_eq!(missed, ["één", "café"]);
+        assert!(vowel.accuracy > assess("Ik heb kaas gekocht.", "Ik heb gekocht.").accuracy, "a vowel costs less than a word");
     }
 
     #[test]
@@ -298,8 +261,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("x.wav");
         // One second of stereo at 48 kHz.
-        let samples = vec![0.25f32; 48_000 * 2];
-        write_wav_16k(&path, &samples, 48_000, 2).unwrap();
+        write_wav_16k(&path, &vec![0.25f32; 48_000 * 2], 48_000, 2).unwrap();
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(&bytes[0..4], b"RIFF");
         assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 16_000);

@@ -15,20 +15,28 @@ pub enum InputKind {
 }
 
 impl InputKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            InputKind::Bluetooth => "Bluetooth",
-            InputKind::Usb => "USB",
-            InputKind::BuiltIn => "laptop",
-            InputKind::Other => "overig",
+    const LABELS: [&str; 4] = ["Bluetooth", "USB", "laptop", "overig"];
+
+    /// From the node's name and its device's bus.
+    fn of(node_name: &str, bus: Option<&str>) -> InputKind {
+        if node_name.starts_with("bluez") {
+            return InputKind::Bluetooth;
         }
+        match bus {
+            Some("bluetooth") => InputKind::Bluetooth,
+            Some("usb") => InputKind::Usb,
+            Some("pci") => InputKind::BuiltIn,
+            _ => InputKind::Other,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        InputKind::LABELS[self as usize]
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Input {
-    /// PipeWire's node name, such as `bluez_input.80:99:E7:D7:98:EE`.
-    pub id: String,
     /// The name people see, such as `WF-1000XM5`.
     pub label: String,
     pub kind: InputKind,
@@ -38,6 +46,15 @@ pub struct Input {
     pub is_default: bool,
 }
 
+impl Input {
+    /// "Bluetooth, volume 100%, gedempt".
+    pub fn describe(&self) -> String {
+        let volume = self.volume.map(|volume| format!("volume {:.0}%", volume * 100.0));
+        let muted = self.muted.then(|| "gedempt".to_string());
+        [Some(self.kind.label().to_string()), volume, muted].into_iter().flatten().collect::<Vec<_>>().join(", ")
+    }
+}
+
 /// The microphones, with the default one first.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Inputs(pub Vec<Input>);
@@ -45,10 +62,7 @@ pub struct Inputs(pub Vec<Input>);
 impl Inputs {
     /// Asks PipeWire. `None` when `pw-dump` is missing or fails.
     pub fn current() -> Option<Inputs> {
-        let output = Command::new("pw-dump").output().ok()?;
-        if !output.status.success() {
-            return None;
-        }
+        let output = Command::new("pw-dump").output().ok().filter(|output| output.status.success())?;
         parse(&String::from_utf8_lossy(&output.stdout))
     }
 
@@ -62,54 +76,57 @@ impl Inputs {
     }
 }
 
+/// The objects in a `pw-dump`.
+struct Dump(Vec<Value>);
+
+impl Dump {
+    fn of_type<'a>(&'a self, kind: &'a str) -> impl Iterator<Item = &'a Value> {
+        self.0.iter().filter(move |object| object["type"] == kind)
+    }
+
+    /// The node name of the default microphone.
+    fn default_source(&self) -> Option<&str> {
+        self.of_type("PipeWire:Interface:Metadata")
+            .filter_map(|object| object["metadata"].as_array())
+            .flatten()
+            .find(|entry| entry["key"] == "default.audio.source")?["value"]["name"]
+            .as_str()
+    }
+
+    /// The bus of the device a node names by id, as a number or a string.
+    fn device_bus(&self, device_id: &Value) -> Option<&str> {
+        let wanted = device_id.as_u64().or_else(|| device_id.as_str()?.parse().ok())?;
+        self.of_type("PipeWire:Interface:Device").find(|object| object["id"].as_u64() == Some(wanted))?["info"]["props"]
+            ["device.bus"]
+            .as_str()
+    }
+
+    fn input(&self, node: &Value, default_source: Option<&str>) -> Option<Input> {
+        let props = &node["info"]["props"];
+        let name = props["node.name"].as_str()?;
+        let label = props["node.description"].as_str().or(props["node.nick"].as_str()).unwrap_or(name);
+        let bus = props["device.bus"].as_str().or_else(|| self.device_bus(&props["device.id"]));
+        let sound = &node["info"]["params"]["Props"][0];
+        // PipeWire keeps volumes cubed; the slider shows the cube root.
+        let volume = sound["channelVolumes"].as_array().and_then(|channels| channels.iter().filter_map(Value::as_f64).reduce(f64::max));
+        Some(Input {
+            label: label.to_string(),
+            kind: InputKind::of(name, bus),
+            volume: volume.map(|v| v.cbrt() as f32),
+            muted: sound["mute"].as_bool().unwrap_or(false),
+            is_default: default_source == Some(name),
+        })
+    }
+}
+
 /// Reads `pw-dump` output.
 pub fn parse(json: &str) -> Option<Inputs> {
-    let objects: Vec<Value> = serde_json::from_str(json).ok()?;
-    let default_name = objects
-        .iter()
-        .filter(|o| o["type"] == "PipeWire:Interface:Metadata")
-        .filter_map(|o| o["metadata"].as_array())
-        .flatten()
-        .find(|entry| entry["key"] == "default.audio.source")
-        .and_then(|entry| entry["value"]["name"].as_str())
-        .map(str::to_string);
-    // A node names its device by id, as a number or a string.
-    let device_bus = |device_id: &Value| {
-        let wanted = device_id.as_u64().or_else(|| device_id.as_str()?.parse().ok())?;
-        objects
-            .iter()
-            .find(|o| o["type"] == "PipeWire:Interface:Device" && o["id"].as_u64() == Some(wanted))
-            .and_then(|o| o["info"]["props"]["device.bus"].as_str())
-            .map(str::to_string)
-    };
-
-    let mut inputs: Vec<Input> = objects
-        .iter()
-        .filter(|o| o["type"] == "PipeWire:Interface:Node" && o["info"]["props"]["media.class"] == "Audio/Source")
-        .filter_map(|o| {
-            let props = &o["info"]["props"];
-            let id = props["node.name"].as_str()?.to_string();
-            let label = props["node.description"].as_str().or(props["node.nick"].as_str()).unwrap_or(&id).to_string();
-            let bus = props["device.bus"].as_str().map(str::to_string).or_else(|| device_bus(&props["device.id"]));
-            let kind = if id.starts_with("bluez") || bus.as_deref() == Some("bluetooth") {
-                InputKind::Bluetooth
-            } else if bus.as_deref() == Some("usb") {
-                InputKind::Usb
-            } else if bus.as_deref() == Some("pci") {
-                InputKind::BuiltIn
-            } else {
-                InputKind::Other
-            };
-            let sound = o["info"]["params"]["Props"].as_array().and_then(|props| props.first());
-            let muted = sound.and_then(|p| p["mute"].as_bool()).unwrap_or(false);
-            // PipeWire keeps volumes cubed; the slider shows the cube root.
-            let volume = sound
-                .and_then(|p| p["channelVolumes"].as_array())
-                .and_then(|channels| channels.iter().filter_map(Value::as_f64).reduce(f64::max))
-                .map(|v| v.cbrt() as f32);
-            let is_default = default_name.as_deref() == Some(id.as_str());
-            Some(Input { id, label, kind, volume, muted, is_default })
-        })
+    let dump = Dump(serde_json::from_str(json).ok()?);
+    let default_source = dump.default_source();
+    let mut inputs: Vec<Input> = dump
+        .of_type("PipeWire:Interface:Node")
+        .filter(|node| node["info"]["props"]["media.class"] == "Audio/Source")
+        .filter_map(|node| dump.input(node, default_source))
         .collect();
     inputs.sort_by_key(|input| !input.is_default);
     Some(Inputs(inputs))
@@ -117,7 +134,7 @@ pub fn parse(json: &str) -> Option<Inputs> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{InputKind, parse};
 
     const DUMP: &str = r#"[
       { "id": 49, "type": "PipeWire:Interface:Device",
@@ -146,12 +163,14 @@ mod tests {
         assert_eq!(default.kind, InputKind::Bluetooth);
         assert!(!default.muted);
         assert!((default.volume.unwrap() - 0.5).abs() < 1e-6);
+        assert_eq!(default.describe(), "Bluetooth, volume 50%");
 
         let others: Vec<_> = inputs.others().collect();
         assert_eq!(others.len(), 1, "speakers are not microphones");
         assert_eq!(others[0].label, "Ryzen HD Audio Controller Digital Microphone");
         assert_eq!(others[0].kind, InputKind::BuiltIn);
         assert!(others[0].muted);
+        assert_eq!(others[0].describe(), "laptop, volume 100%, gedempt");
     }
 
     #[test]

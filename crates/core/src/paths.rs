@@ -39,20 +39,19 @@ impl Paths {
         self.root.join("audio")
     }
 
-    /// Piper voice models. `scripts/fetch-models.sh` fills it.
+    /// Piper voice models, or `$DUTCH_FLASHCARDS_VOICES`. `scripts/fetch-models.sh` fills it.
     pub fn voices(&self) -> PathBuf {
-        if let Some(dir) = std::env::var_os("DUTCH_FLASHCARDS_VOICES") {
-            return PathBuf::from(dir);
-        }
-        self.root.join("voices")
+        self.overridable("DUTCH_FLASHCARDS_VOICES", "voices")
     }
 
-    /// The Whisper speech recognizer. `scripts/fetch-models.sh` fills it.
+    /// The Whisper speech recognizer, or `$DUTCH_FLASHCARDS_MODELS`. `scripts/fetch-models.sh` fills it.
     pub fn models(&self) -> PathBuf {
-        if let Some(dir) = std::env::var_os("DUTCH_FLASHCARDS_MODELS") {
-            return PathBuf::from(dir);
-        }
-        self.root.join("models")
+        self.overridable("DUTCH_FLASHCARDS_MODELS", "models")
+    }
+
+    /// The folder named by `variable`, else `name` inside the data folder.
+    fn overridable(&self, variable: &str, name: &str) -> PathBuf {
+        std::env::var_os(variable).map_or_else(|| self.root.join(name), PathBuf::from)
     }
 
     /// The app's log: errors, panics and the recording steps.
@@ -69,4 +68,9 @@ impl Paths {
         std::fs::create_dir_all(&self.root)?;
         std::fs::create_dir_all(self.audio())
     }
+}
+
+/// The program `$variable` names, else `name` found on the `PATH`.
+pub fn program(variable: &str, name: &str) -> PathBuf {
+    std::env::var_os(variable).map_or_else(|| PathBuf::from(name), PathBuf::from)
 }

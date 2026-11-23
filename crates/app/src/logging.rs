@@ -6,8 +6,8 @@
 
 use std::fmt::Display;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead as _, BufReader, Write as _};
-use std::os::fd::FromRawFd as _;
+use std::io::{self, BufRead as _, BufReader, Read, Write as _};
+use std::os::fd::{AsFd as _, AsRawFd as _};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
@@ -23,35 +23,35 @@ static LOG: OnceLock<Mutex<Log>> = OnceLock::new();
 
 /// Opens the log, routes stderr into it and logs panics. Call once, first thing.
 pub fn init(path: &Path) {
-    if let Some(dir) = path.parent() {
-        let _ = fs::create_dir_all(dir);
-    }
-    if fs::metadata(path).is_ok_and(|meta| meta.len() > MAX_SIZE) {
-        let _ = fs::rename(path, path.with_extension("log.1"));
-    }
-    let file = match OpenOptions::new().create(true).append(true).open(path) {
+    let file = match open(path) {
         Ok(file) => file,
-        Err(err) => {
-            eprintln!("Kan het logboek {} niet openen: {err}", path.display());
-            return;
-        }
+        Err(err) => return eprintln!("Kan het logboek {} niet openen: {err}", path.display()),
     };
-    // SAFETY: dup returns a new descriptor that only this File owns.
-    let terminal = match unsafe { libc::dup(libc::STDERR_FILENO) } {
-        -1 => None,
-        fd => Some(unsafe { File::from_raw_fd(fd) }),
-    };
+    let terminal = io::stderr().as_fd().try_clone_to_owned().ok().map(File::from);
     if LOG.set(Mutex::new(Log { file, terminal })).is_err() {
         return;
     }
-    capture_stderr();
+    if let Err(err) = capture_stderr() {
+        error("logboek", format!("stderr wordt niet gelogd: {err}"));
+    }
     std::panic::set_hook(Box::new(|info| {
-        let thread = std::thread::current();
         let backtrace = std::backtrace::Backtrace::force_capture();
-        write("PANIC", &format!("in thread '{}': {info}\n{backtrace}", thread.name().unwrap_or("naamloos")));
+        let thread = std::thread::current().name().unwrap_or("naamloos").to_string();
+        write("PANIC", &format!("in thread '{thread}': {info}\n{backtrace}"));
     }));
     let args: Vec<String> = std::env::args().skip(1).collect();
-    info(format!("Gestart: versie {}{}", env!("CARGO_PKG_VERSION"), if args.is_empty() { String::new() } else { format!(", {}", args.join(" ")) }));
+    info(format!("Gestart: versie {} {}", env!("CARGO_PKG_VERSION"), args.join(" ")));
+}
+
+/// Opens the log for appending, first moving a full one aside.
+fn open(path: &Path) -> io::Result<File> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    if fs::metadata(path).is_ok_and(|meta| meta.len() > MAX_SIZE) {
+        fs::rename(path, path.with_extension("log.1"))?;
+    }
+    OpenOptions::new().create(true).append(true).open(path)
 }
 
 /// Logs an error from `area` (such as "opname") and returns the text, for showing it.
@@ -68,10 +68,7 @@ pub fn info(text: impl Display) {
 fn write(level: &str, text: &str) {
     let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     let line = format!("{stamp} {level:<5} {}\n", text.trim_end().replace('\n', "\n    "));
-    let Some(log) = LOG.get() else {
-        eprint!("{line}");
-        return;
-    };
+    let Some(log) = LOG.get() else { return eprint!("{line}") };
     let mut log = log.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let _ = log.file.write_all(line.as_bytes());
     if let Some(terminal) = &mut log.terminal {
@@ -80,39 +77,39 @@ fn write(level: &str, text: &str) {
 }
 
 /// Points stderr at a pipe and logs every line that arrives on it.
-fn capture_stderr() {
-    let mut fds = [0; 2];
-    // SAFETY: plain descriptor calls; each descriptor is closed or owned below.
-    unsafe {
-        if libc::pipe(fds.as_mut_ptr()) != 0 {
-            return;
-        }
-        if libc::dup2(fds[1], libc::STDERR_FILENO) == -1 {
-            libc::close(fds[0]);
-            libc::close(fds[1]);
-            return;
-        }
-        libc::close(fds[1]);
+fn capture_stderr() -> io::Result<()> {
+    let (reader, writer) = io::pipe()?;
+    // SAFETY: both descriptors are open for the whole call; dup2 only makes
+    // stderr another name for the pipe's writing end.
+    if unsafe { libc::dup2(writer.as_raw_fd(), libc::STDERR_FILENO) } == -1 {
+        return Err(io::Error::last_os_error());
     }
-    let reader = unsafe { File::from_raw_fd(fds[0]) };
-    let _ = std::thread::Builder::new().name("stderr-log".into()).spawn(move || {
-        // Read bytes, not text: a library may print anything, and stopping would
-        // leave stderr blocked once the pipe fills.
-        let mut reader = BufReader::new(reader);
-        let mut line = Vec::new();
-        loop {
-            line.clear();
-            match reader.read_until(b'\n', &mut line) {
-                Ok(0) => break,
-                Ok(_) => {
-                    let text = String::from_utf8_lossy(&line);
-                    if !text.trim().is_empty() {
-                        write("STDERR", &text);
-                    }
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(_) => break,
-            }
+    std::thread::Builder::new().name("stderr-log".into()).spawn(move || forward_lines(reader, |line| write("STDERR", line)))?;
+    Ok(())
+}
+
+/// Hands each non-blank line `reader` yields to `emit` until it closes. Reads bytes,
+/// not text: a library may print anything, and stopping would block stderr once the pipe fills.
+fn forward_lines(reader: impl Read, mut emit: impl FnMut(&str)) {
+    let mut reader = BufReader::new(reader);
+    let mut line = Vec::new();
+    while reader.read_until(b'\n', &mut line).is_ok_and(|read| read > 0) {
+        let text = String::from_utf8_lossy(&line);
+        if !text.trim().is_empty() {
+            emit(text.trim_end());
         }
-    });
+        line.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::forward_lines;
+
+    #[test]
+    fn lines_from_libraries_reach_the_log_even_when_not_utf8() {
+        let mut lines = Vec::new();
+        forward_lines(&b"ALSA lib pcm.c: fout\n\xff raw\n\nlast line without newline"[..], |line| lines.push(line.to_string()));
+        assert_eq!(lines, ["ALSA lib pcm.c: fout", "\u{fffd} raw", "last line without newline"]);
+    }
 }

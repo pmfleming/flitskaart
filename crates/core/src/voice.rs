@@ -4,10 +4,10 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, bail};
 use sha2::{Digest, Sha256};
 
-use crate::paths::Paths;
+use crate::paths::{Paths, program};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Gender {
@@ -100,8 +100,7 @@ pub struct Speaker {
 
 impl Speaker {
     pub fn new(paths: &Paths) -> Speaker {
-        let piper = std::env::var_os("DUTCH_FLASHCARDS_PIPER").map_or_else(|| PathBuf::from("piper"), PathBuf::from);
-        Speaker { voices: paths.voices(), audio: paths.audio(), piper }
+        Speaker { voices: paths.voices(), audio: paths.audio(), piper: program("DUTCH_FLASHCARDS_PIPER", "piper") }
     }
 
     /// Where the audio for this phrase lives once generated.
@@ -111,17 +110,17 @@ impl Speaker {
             hash.update(part.as_bytes());
             hash.update([0]);
         }
-        let digest = hash.finalize();
-        let name: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
+        let name: String = hash.finalize().iter().take(16).map(|b| format!("{b:02x}")).collect();
         self.audio.join(format!("{name}.wav"))
     }
 
-    pub fn model_path(&self, voice: &VoiceOption) -> PathBuf {
+    fn model_path(&self, voice: &VoiceOption) -> PathBuf {
         self.voices.join(format!("{}.onnx", voice.model))
     }
 
     pub fn is_installed(&self, voice: &VoiceOption) -> bool {
-        has_file(&self.model_path(voice)) && has_file(&self.model_path(voice).with_extension("onnx.json"))
+        let model = self.model_path(voice);
+        has_file(&model) && has_file(&model.with_extension("onnx.json"))
     }
 
     /// Returns the cached audio, generating it with Piper first if needed.
@@ -132,41 +131,43 @@ impl Speaker {
             bail!("Er is geen tekst om voor te lezen.");
         }
         let target = self.audio_path(text, voice, speed);
-        if has_file(&target) {
-            return Ok(target);
+        if !has_file(&target) {
+            self.generate(text, voice, speed, &target)?;
         }
+        Ok(target)
+    }
+
+    /// Runs Piper into a partial file and moves it into place once complete.
+    fn generate(&self, text: &str, voice: &VoiceOption, speed: Speed, target: &Path) -> Result<()> {
         if !self.is_installed(voice) {
-            return Err(anyhow!(
-                "De stem {} is niet geïnstalleerd. Voer scripts/fetch-models.sh uit.",
-                voice.label
-            ));
+            bail!("De stem {} is niet geïnstalleerd. Voer scripts/fetch-models.sh uit.", voice.label);
         }
         std::fs::create_dir_all(&self.audio)?;
         let partial = target.with_extension("partial.wav");
-        let mut command = Command::new(&self.piper);
-        command
+        let mut child = Command::new(&self.piper)
             .arg("--model")
             .arg(self.model_path(voice))
-            .arg("--length-scale")
-            .arg(speed.length_scale())
-            .arg("--output-file")
+            .args(["--length-scale", speed.length_scale(), "--output-file"])
             .arg(&partial)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped());
-        let mut child = command.spawn().with_context(|| {
-            format!("Piper kon niet starten ({}). Start de app vanuit `nix develop`.", self.piper.display())
-        })?;
-        child.stdin.take().unwrap().write_all(text.as_bytes())?;
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("Piper kon niet starten ({}). Start de app vanuit `nix develop`.", self.piper.display()))?;
+        child.stdin.take().context("Piper nam geen tekst aan")?.write_all(text.as_bytes())?;
         let output = child.wait_with_output()?;
         if !output.status.success() || !has_file(&partial) {
             let _ = std::fs::remove_file(&partial);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Piper gaf een fout: {}", stderr.lines().last().unwrap_or("onbekend"));
+            bail!("Piper gaf een fout: {}", last_line(&output.stderr));
         }
-        std::fs::rename(&partial, &target)?;
-        Ok(target)
+        std::fs::rename(&partial, target)?;
+        Ok(())
     }
+}
+
+/// The last line a program printed, for its error message.
+pub(crate) fn last_line(output: &[u8]) -> String {
+    String::from_utf8_lossy(output).lines().last().unwrap_or("onbekend").to_string()
 }
 
 fn has_file(path: &Path) -> bool {
@@ -175,7 +176,7 @@ fn has_file(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Gender, Paths, Speaker, Speed, VOICES, voice, voices_for};
 
     #[test]
     fn every_gender_has_a_voice_and_ids_are_unique() {
