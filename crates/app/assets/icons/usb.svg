@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- USB: a plug -->
+  <rect x="7.5" y="8" width="9" height="7.5" rx="2" />
+  <path d="M10 4v4M14 4v4M12 15.5V21" />
+</svg>

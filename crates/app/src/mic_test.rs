@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use dutch_flashcards_core::inputs::Inputs;
+use dutch_flashcards_core::inputs::{Input, InputKind, Inputs};
 use dutch_flashcards_core::speech::write_wav_16k;
 use dutch_flashcards_core::store::{INPUT_BOOSTS, boost_label, snap_input_boost};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -284,36 +284,28 @@ impl FlashcardsApp {
             .child(ticks)
     }
 
-    /// Which microphone the sound comes from, and which others there are.
+    /// The microphones, one row each: the one recordings come from first and
+    /// highlighted, the others quieter below it.
     fn render_inputs(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let Some(inputs) = &self.mic_test.inputs else { return hint(self.mic_test.unknown_source(), cx).into_any_element() };
-        let muted = inputs.default_input().is_some_and(|input| input.muted);
-        let source = match inputs.default_input() {
-            Some(input) => h_flex()
-                .gap_2()
-                .flex_wrap()
-                .items_center()
-                .child(explained("mic-source", "Geluid komt van").text_color(theme.muted_foreground).child(icons::microphone().size_4()))
-                .child(div().font_weight(FontWeight::SEMIBOLD).child(input.label.clone()))
-                .child(hint(input.describe(), cx).when(muted, |d| d.text_color(theme.danger))),
-            None => h_flex().child(hint("Er is geen standaardmicrofoon gekozen in je systeeminstellingen.", cx).text_color(theme.danger)),
-        };
-        let others: Vec<String> = inputs.others().map(|input| format!("{} ({})", input.label, input.describe())).collect();
-        sub_box(if muted { theme.danger } else { theme.border }, theme.muted)
-            .gap_1()
-            .child(source)
-            .when(muted, |d| d.child(hint("Deze microfoon staat gedempt. Zet hem aan in je systeeminstellingen.", cx).text_color(theme.danger)))
-            .when(!others.is_empty(), |d| {
-                d.child(
-                    explained("mic-others", "Een andere microfoon kies je in de geluidsinstellingen van je systeem; de app gebruikt de standaardmicrofoon.")
-                        .flex()
-                        .items_center()
-                        .gap_1p5()
-                        .child(icons::tip().size_4().flex_none().text_color(theme.muted_foreground))
-                        .child(hint(format!("Ook aangesloten: {}", others.join("; ")), cx)),
-                )
-            })
+        let default = inputs.default_input();
+        let muted = default.is_some_and(|input| input.muted);
+        let header = h_flex()
+            .justify_between()
+            .items_center()
+            .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme.muted_foreground).child("Microfoons"))
+            .child(
+                explained("mic-choose", "Een andere microfoon kies je in de geluidsinstellingen van je systeem; de app neemt op met de standaardmicrofoon.")
+                    .text_color(theme.muted_foreground)
+                    .child(icons::tip().size_4()),
+            );
+        v_flex()
+            .gap_1p5()
+            .child(header)
+            .children(inputs.0.iter().enumerate().map(|(index, input)| input_row(index, input, cx)))
+            .when(default.is_none(), |d| d.child(hint("Er is geen standaardmicrofoon gekozen in je systeeminstellingen.", cx).text_color(theme.danger)))
+            .when(muted, |d| d.child(hint("De microfoon in gebruik staat gedempt. Zet hem aan in je systeeminstellingen.", cx).text_color(theme.danger)))
             .into_any_element()
     }
 
@@ -348,4 +340,66 @@ impl FlashcardsApp {
 /// A padded, rounded inset box inside a settings card.
 fn sub_box(border: gpui_kit::Hsla, bg: gpui_kit::Hsla) -> Div {
     v_flex().p_3().rounded(px(8.)).border_1().border_color(border).bg(bg)
+}
+
+/// One microphone: its kind, its name (cut short when long, whole on hover),
+/// its volume, whether it is muted, and whether recordings come from it.
+fn input_row(index: usize, input: &Input, cx: &App) -> Div {
+    let theme = cx.theme();
+    let active = input.is_default;
+    let id = index as u64;
+    let kind = match input.kind {
+        InputKind::Bluetooth => icons::headset(),
+        InputKind::Usb => icons::usb(),
+        InputKind::BuiltIn => icons::laptop(),
+        InputKind::Other => icons::microphone(),
+    };
+    let (fg, muted_fg) = if active { (theme.accent_foreground, theme.accent_foreground.opacity(0.75)) } else { (theme.foreground, theme.muted_foreground) };
+    let in_use = h_flex()
+        .flex_none()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .py(px(1.5))
+        .rounded_full()
+        .bg(theme.primary.opacity(0.15))
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.primary)
+        .child(icons::check().size_3p5())
+        .child("In gebruik");
+    h_flex()
+        .gap_3()
+        .items_center()
+        .px_3()
+        .py_2()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(if active { theme.primary.opacity(0.5) } else { theme.border })
+        .when(active, |d| d.bg(theme.accent))
+        .child(explained(("mic-kind", id), input.kind.label().to_string()).flex_none().text_color(muted_fg).child(kind.size_5()))
+        .child(
+            explained(("mic-name", id), input.label.clone())
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(if active { fg } else { muted_fg })
+                .when(active, |d| d.font_weight(FontWeight::SEMIBOLD))
+                .child(input.label.clone()),
+        )
+        .when_some(input.volume, |d, volume| {
+            d.child(
+                explained(("mic-volume", id), "Volume in je systeem")
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_sm()
+                    .text_color(muted_fg)
+                    .child(icons::boost().size_4())
+                    .child(format!("{:.0}%", volume * 100.0)),
+            )
+        })
+        .when(input.muted, |d| d.child(explained(("mic-muted", id), "Gedempt").flex_none().text_color(theme.danger).child(icons::mic_off().size_4())))
+        .when(active, |d| d.child(in_use))
 }

@@ -120,6 +120,14 @@ icons! {
     voice,
     /// Microfoon: a microphone on its stand.
     microphone,
+    /// Gedempt: a microphone struck through.
+    mic_off,
+    /// A Bluetooth microphone: a headset.
+    headset,
+    /// The laptop's own microphone.
+    laptop,
+    /// A USB microphone: a plug.
+    usb,
     /// Versterking: a loudspeaker growing louder.
     boost,
     /// Systeem: a screen that is half light, half dark.
