@@ -156,17 +156,19 @@ fn cell(letter: char, slot: Slot, at_cursor: bool, id: SharedString, colors: Col
         Slot::Fixed => Some(colors.wrong.opacity(0.5)),
         _ => None,
     };
-    let shown = match slot {
-        Slot::Wrong(typed) => typed,
-        _ => letter,
-    };
     let base = div()
         .relative()
-        .child(shown.to_string())
+        .child(letter.to_string())
         .children(line.map(|color| div().absolute().bottom(px(2.)).left(px(1.5)).right(px(1.5)).h(px(2.)).rounded_full().bg(color)));
     match slot {
         Slot::Given => base.text_color(colors.text).into_any_element(),
         Slot::Blank => base.text_color(gpui_kit::transparent_black()).into_any_element(),
+        // The cell keeps the width of the right letter, so a wrong one of
+        // another width never shifts the words or rewraps the line.
+        Slot::Wrong(typed) if typed != letter => base
+            .text_color(gpui_kit::transparent_black())
+            .child(div().absolute().inset_0().flex().justify_center().whitespace_nowrap().text_color(colors.wrong).child(typed.to_string()))
+            .into_any_element(),
         Slot::Wrong(_) | Slot::Shown => base.text_color(colors.wrong).into_any_element(),
         // Green for a moment, then back to the text colour.
         Slot::Right | Slot::Fixed => base
