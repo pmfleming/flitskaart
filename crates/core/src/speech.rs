@@ -123,6 +123,11 @@ const SPEECH_LABELS: [&str; 4] = ["Onverstaanbaar", "Moeilijk te verstaan", "Goe
 /// The lowest share of letters understood for each grade above Onverstaanbaar.
 const GRADE_FLOORS: [(f32, Grade); 3] = [(0.95, Grade::Easy), (0.85, Grade::Comfortable), (0.65, Grade::Hard)];
 
+/// The grade for a share of letters right (0.0–1.0), when reading aloud or writing.
+pub fn grade_for(accuracy: f32) -> Grade {
+    GRADE_FLOORS.iter().find(|(floor, _)| accuracy >= *floor).map_or(Grade::DontKnow, |(_, grade)| *grade)
+}
+
 /// The pronunciation grade's wording.
 pub fn speech_label(grade: Grade) -> &'static str {
     SPEECH_LABELS[grade.index()]
@@ -144,7 +149,7 @@ pub fn assess(card: &str, heard: &str) -> Assessment {
         let errors = edit_distance(&card_letters, &heard_letters) as f32;
         (1.0 - errors / card_letters.len() as f32).max(0.0)
     };
-    let grade = GRADE_FLOORS.iter().find(|(floor, _)| accuracy >= *floor).map_or(Grade::DontKnow, |(_, grade)| *grade);
+    let grade = grade_for(accuracy);
     let matched = aligned_matches(&card_words, &heard_words);
     let words = display_words(card).into_iter().zip(matched).map(|(word, heard)| WordMark { word, heard }).collect();
     Assessment { heard: heard.trim().to_string(), accuracy, grade, words }

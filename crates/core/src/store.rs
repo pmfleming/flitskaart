@@ -9,6 +9,7 @@ use crate::paths::Paths;
 use crate::schedule::{Scheduler, count, new_schedule};
 use crate::speech::Assessment;
 use crate::voice::{Gender, VOICES, voices_for};
+use crate::writing::Written;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS snippets (
@@ -63,6 +64,9 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("cards", "speech_accuracy", "REAL"),
     // How much of the stability gain the review earned (see schedule::count).
     ("reviews", "share", "REAL"),
+    // How well the learner wrote the card, if they did.
+    ("reviews", "written_grade", "INTEGER"),
+    ("reviews", "written_accuracy", "REAL"),
 ];
 
 const CARD_COLUMNS: &str =
@@ -189,6 +193,8 @@ pub struct Review<'a> {
     pub own: Grade,
     /// How understandable they were, when they read it aloud.
     pub speech: Option<&'a Assessment>,
+    /// How well they wrote it, when they did.
+    pub written: Option<Written>,
     pub mode: Mode,
     /// Whether they opened the meaning.
     pub peeked: bool,
@@ -401,9 +407,11 @@ impl Store {
 
     /// Saves a review and reschedules the card. [`count`] decides how the review counts.
     pub fn record_review(&self, id: CardId, review: Review, scheduler: &Scheduler, now: DateTime<Utc>) -> Result<Card> {
-        let Review { own, speech, mode, peeked } = review;
+        let Review { own, speech, written, mode, peeked } = review;
         let card = self.card(id)?.ok_or_else(|| anyhow!("card {id} no longer exists"))?;
-        let counted = count(own, speech.map(|s| s.grade), peeked, mode);
+        // Reading aloud and writing are both tests; the weaker one counts.
+        let tested = [speech.map(|s| s.grade), written.map(|w| w.grade)].into_iter().flatten().min();
+        let counted = count(own, tested, peeked, mode);
         let schedule = scheduler.apply(&card.schedule, now, counted);
         let accuracy = || speech.map_or(Value::Null, |s| Value::Real(f64::from(s.accuracy)));
         self.exec(
@@ -422,8 +430,8 @@ impl Store {
             ],
         )?;
         self.exec(
-            "INSERT INTO reviews (card_id, grade, own_grade, speech_grade, speech_accuracy, heard, mode, peeked, reviewed_at, share)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO reviews (card_id, grade, own_grade, speech_grade, speech_accuracy, heard, mode, peeked, reviewed_at, share, written_grade, written_accuracy)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             vec![
                 Value::Integer(id),
                 Value::Integer(i64::from(counted.grade.number())),
@@ -435,6 +443,8 @@ impl Store {
                 Value::Integer(i64::from(peeked)),
                 stamp(now).into(),
                 Value::Real(counted.share),
+                written.map_or(Value::Null, |w| Value::Integer(i64::from(w.grade.number()))),
+                written.map_or(Value::Null, |w| Value::Real(f64::from(w.accuracy))),
             ],
         )?;
         self.card(id)?.ok_or_else(|| anyhow!("card {id} disappeared"))
@@ -588,6 +598,7 @@ mod tests {
         Settings, Store, Utc, Value, boost_label, integer, snap_input_boost, text,
     };
     use crate::speech::{Assessment, assess};
+    use crate::writing::Written;
 
     fn store() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
@@ -608,7 +619,7 @@ mod tests {
     }
 
     fn read(own: Grade, speech: Option<&Assessment>, peeked: bool) -> Review<'_> {
-        Review { own, speech, mode: Mode::Read, peeked }
+        Review { own, speech, written: None, mode: Mode::Read, peeked }
     }
 
     fn reviews(store: &Store, columns: &str) -> Vec<Vec<Value>> {
@@ -679,6 +690,21 @@ mod tests {
         assert_eq!((integer(&saved[1][1]), integer(&saved[1][2])), (integer(&saved[1][3]), 4), "pronunciation replaced the score");
         assert_eq!(text(&saved[1][4]), "Ik heb gekocht.");
         assert_eq!((integer(&saved[3][1]), integer(&saved[3][2])), (2, 4), "Makkelijk with the meaning open counts as Moeilijk");
+    }
+
+    #[test]
+    fn writing_counts_as_a_test_and_the_weaker_test_wins() {
+        let (_dir, store) = store();
+        let (now, scheduler) = (Utc::now(), Scheduler::exact());
+        let ids = deck(&store, &["Ik heb kaas gekocht."], now);
+        let clear = assess("Ik heb kaas gekocht.", "Ik heb kaas gekocht.");
+        let written = Written { accuracy: 0.7, grade: Grade::Hard };
+        let review = Review { written: Some(written), ..read(Grade::Easy, Some(&clear), false) };
+        store.record_review(ids[0], review, &scheduler, now).unwrap();
+        let saved = reviews(&store, "share, grade, speech_grade, written_grade, written_accuracy");
+        assert_eq!(saved[0][0], Value::Real(1.0), "tested, so it counts in full");
+        assert_eq!((integer(&saved[0][1]), integer(&saved[0][2]), integer(&saved[0][3])), (2, 4, 2), "the writing set the grade");
+        assert!(matches!(saved[0][4], Value::Real(a) if (a - 0.7).abs() < 1e-6));
     }
 
     #[test]

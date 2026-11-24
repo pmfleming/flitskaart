@@ -40,6 +40,8 @@ icons! {
     slow,
     /// Lezen: an open book.
     read,
+    /// Schrijf: a pencil filling in the blanks.
+    write,
     /// Toon tekst: an open eye.
     reveal,
     /// Mijn opname: a microphone with a play button.

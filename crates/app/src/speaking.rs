@@ -8,7 +8,7 @@ use dutch_flashcards_core::Grade;
 use dutch_flashcards_core::speech::{Assessment, assess, speech_label, write_wav_16k};
 use dutch_flashcards_core::store::Mode;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, h_flex, v_flex};
-use gpui_kit::{AnyElement, App, Context, FontWeight, Hsla, IntoElement, ParentElement as _, Styled as _, div, px};
+use gpui_kit::{AnyElement, App, Context, Div, FontWeight, Hsla, IntoElement, ParentElement as _, Styled as _, div, px};
 
 use crate::app::FlashcardsApp;
 use crate::icons;
@@ -112,15 +112,7 @@ impl FlashcardsApp {
 
     /// How understandable the learner was. The missed words are marked in the card text.
     fn render_speech_result(&self, result: &Assessment, cx: &mut Context<Self>) -> AnyElement {
-        let chip = div()
-            .px_2()
-            .py(px(1.))
-            .rounded(px(5.))
-            .bg(grade_color(result.grade, cx))
-            .text_color(cx.theme().primary_foreground)
-            .text_sm()
-            .font_weight(FontWeight::SEMIBOLD)
-            .child(result.grade.number().to_string());
+        let chip = grade_chip(result.grade, cx);
         let own_recording = icon_button("own-recording", icons::playback(), "Mijn opname (O)")
             .disabled(!self.study.attempt.has_recording)
             .on_click(cx.listener(|this, _, window, cx| {
@@ -160,4 +152,17 @@ impl FlashcardsApp {
 pub fn grade_color(grade: Grade, cx: &App) -> Hsla {
     let theme = cx.theme();
     [theme.danger, theme.warning, theme.blue, theme.success][grade.index()]
+}
+
+/// A test's grade, 1–4, in its colour.
+pub fn grade_chip(grade: Grade, cx: &App) -> Div {
+    div()
+        .px_2()
+        .py(px(1.))
+        .rounded(px(5.))
+        .bg(grade_color(grade, cx))
+        .text_color(cx.theme().primary_foreground)
+        .text_sm()
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(grade.number().to_string())
 }

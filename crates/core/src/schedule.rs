@@ -25,20 +25,20 @@ pub struct Counted {
 /// Turns the learner's own score into how the review counts.
 ///
 /// - Their own score is the starting point.
-/// - A pronunciation grade below it replaces it.
+/// - A test grade below it (reading aloud or writing, the weaker one) replaces it.
 /// - Opening the meaning caps it at Moeilijk and stops the pause from growing.
-/// - In Lezen, a score without a reading test keeps only part of the growth.
-///   Luisteren has no reading test, so its scores count in full.
+/// - In Lezen, a score without a test keeps only part of the growth.
+///   Luisteren plays the sentence first, so its scores count in full.
 /// - "Weet ik niet" always counts in full: nobody claims a miss by accident.
-pub fn count(own: Grade, speech: Option<Grade>, peeked: bool, mode: Mode) -> Counted {
+pub fn count(own: Grade, tested: Option<Grade>, peeked: bool, mode: Mode) -> Counted {
     if own == Grade::DontKnow {
         return Counted { grade: own, share: 1.0 };
     }
-    let grade = speech.map_or(own, |speech| speech.min(own));
+    let grade = tested.map_or(own, |tested| tested.min(own));
     if peeked {
         return Counted { grade: grade.min(Grade::Hard), share: 0.0 };
     }
-    let backed_up = speech.is_some() || mode == Mode::Listen;
+    let backed_up = tested.is_some() || mode == Mode::Listen;
     Counted { grade, share: if backed_up { 1.0 } else { SCORE_ONLY_SHARE } }
 }
 

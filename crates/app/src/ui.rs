@@ -313,11 +313,6 @@ pub fn icon_button(id: impl Into<ElementId>, icon: Icon, tip: impl Into<SharedSt
     Button::new(id).ghost().with_size(px(26.)).tab_stop(false).icon(icon).tooltip(tip)
 }
 
-/// One of a screen's main tools: an outlined icon button, named on hover.
-pub fn tool_button(id: impl Into<ElementId>, icon: Icon, tip: impl Into<SharedString>) -> Button {
-    Button::new(id).outline().tab_stop(false).w(px(44.)).h(px(40.)).child(icon.size(px(20.))).tooltip(tip)
-}
-
 /// Something that says what it is on hover, such as an icon or a count.
 pub fn explained(id: impl Into<ElementId>, tip: impl Into<SharedString>) -> Stateful<Div> {
     let tip = tip.into();

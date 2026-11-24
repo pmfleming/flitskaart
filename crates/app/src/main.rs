@@ -17,6 +17,7 @@ mod talk;
 #[cfg(test)]
 mod tests;
 mod ui;
+mod writing;
 
 use std::collections::VecDeque;
 use std::time::Duration;

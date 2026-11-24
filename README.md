@@ -9,26 +9,43 @@ press `V`.
 
 ## Studying
 
-Each card is one panel: the Dutch, a row of icon buttons, and the four scores.
-The buttons have no text; hovering one shows its name and key. Use them in any
-order, or none of them.
+Each card is one panel: the Dutch, two big buttons to test yourself, and the
+four scores. Three small helpers sit in the card's top corner. Use any of them
+in any order, or none.
 
-- **Test mijn uitspraak** (speech bubble, `Space`) – read the card aloud. Recording stops by
-  itself when you finish. Whisper, running on this laptop, writes down what it
-  heard and the app grades how understandable you were from 1 to 4; words it
-  missed are underlined in the card, and the sound-into-text mark shows what
-  Whisper heard. Press it again for another try; the latest try counts.
+The two tests:
+
+- **Spreek** (`Space`) – read the card aloud. Recording stops by itself when you
+  finish. Whisper, running on this laptop, writes down what it heard and the app
+  grades how understandable you were from 1 to 4; words it missed are underlined
+  in the card, and the sound-into-text mark shows what Whisper heard. Press it
+  again for another try; the latest try counts. (In Luisteren this button is
+  **Toon tekst**.)
+- **Schrijf** (`W`) – the Dutch turns into blanks, one short line per letter, and
+  you type it. Spaces and punctuation are filled in; case and accents don't
+  matter (e for é). A right letter flashes green and turns white; a wrong key
+  turns the waiting blank red, and that letter stays red once you find it. After
+  three wrong keys the letter is shown in red and the next one waits. Every key
+  goes to the writing until it is done; `Esc` stops it. The grade is the share
+  of letters right first time, on the same 1–4 scale as speaking. Writing it again
+  doesn't change the grade.
+
+The helpers, top right in the card (they never decide the review):
+
 - **Hoor de zin** (ear, `H`) and **Langzaam** (snail, `L`) – the sentence in
-  the Dutch voice chosen in Instellingen. Listening never changes how the review counts.
+  the Dutch voice chosen in Instellingen.
 - **Betekenis** (two cards, `V`) – the English and the note.
+
+Then score:
+
 - **Weet ik niet / Moeilijk / Gaat goed / Makkelijk** (`1`–`4`) – how easily
   the sentence came back. This saves the review and shows the next card.
 
 What you did before scoring decides how far your score is trusted. The panel
 doesn't show any of this:
 
-- **Read aloud, then scored** – counts in full. If your pronunciation grade is
-  lower than your own score, it is used instead.
+- **Spoken or written, then scored** – counts in full. If the test grade is
+  lower than your own score, it is used instead; with both tests, the lower one.
 - **Scored only** – the card keeps 70% of the longer pause FSRS proposes
   (`SCORE_ONLY_SHARE` in `crates/core/src/schedule.rs`).
 - **Opened the meaning** – counts as Moeilijk at best, and the pause does not
@@ -36,8 +53,8 @@ doesn't show any of this:
 - **Weet ik niet** always counts in full.
 
 A new card has no pause to grow yet, so only the grade rules apply to it. Your
-own score, the pronunciation grade, the grade used and the share are kept with
-every review.
+own score, the pronunciation and writing grades, the grade used and the share
+are kept with every review.
 
 Pronunciation grades come from the share of the card's letters Whisper
 understood: 95%+ is 4 (Heel duidelijk), 85%+ is 3, 65%+ is 2, less is 1.
@@ -46,6 +63,7 @@ understood: 95%+ is 4 (Heel duidelijk), 85%+ is 3, 65%+ is 2, less is 1.
 | --- | --- |
 | `Space` | Test the reading (or stop the recording); in Luisteren, show the text |
 | `1`–`4` | Score the card and go to the next one |
+| `W` | Write the card (`Esc` stops) |
 | `R` / `O` | Test again / play your own recording |
 | `Esc` | Cancel a recording |
 | `V` | Show or hide the meaning |
@@ -54,7 +72,7 @@ understood: 95%+ is 4 (Heel duidelijk), 85%+ is 3, 65%+ is 2, less is 1.
 
 Modes: **Lezen** (the panel above) and **Luisteren** (the audio plays first with
 the text hidden; there is no reading test, so scores count in full unless you
-open the meaning).
+open the meaning. **Schrijf** there is a dictation: write what you heard).
 
 Scheduling is FSRS, the algorithm modern Anki uses. New cards are limited per
 day (10 by default, set in Instellingen).

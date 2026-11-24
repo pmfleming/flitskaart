@@ -12,6 +12,7 @@ pub mod schedule;
 pub mod speech;
 pub mod store;
 pub mod voice;
+pub mod writing;
 
 pub use model::{Card, CardId, Grade, Status};
 pub use store::Store;

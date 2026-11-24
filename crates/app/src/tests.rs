@@ -89,8 +89,19 @@ fn a_deck_from_paste_to_practice(cx: &mut TestAppContext) {
     app.click(cx, [row("english", ids[0]), row("source", ids[0]), row("discard", ids[2]), row("accept", ids[0]), "accept-all".into()]);
     assert_eq!(app.read(cx, |app| (app.drafts.len(), app.deck.cards.len())), (0, 2));
 
-    // Lezen: the meaning counts against the review; then Luisteren, veiled until Space.
+    // Lezen: write the card with one wrong key, so that letter stays red; the
+    // writing then grades the review. Every key goes to the writing meanwhile.
     app.show(cx, Screen::Study);
+    let dutch = app.read(cx, |app| app.study.card.as_ref().unwrap().dutch.clone());
+    let letters: Vec<String> = dutch.chars().filter(|c| c.is_alphanumeric()).map(|c| c.to_lowercase().to_string()).collect();
+    app.press(cx, "w q");
+    app.click(cx, ["write".into(), "write".into()]);
+    assert!(app.read(cx, |app| app.study.attempt.writing.as_ref().is_some_and(|w| w.cursor() == Some(0))), "stopped and started afresh");
+    app.press(cx, &format!("q {}", letters.join(" ")));
+    let written = app.read(cx, |app| app.study.attempt.written.expect("written"));
+    assert!(written.accuracy < 1.0 && written.accuracy > 0.8, "{written:?}");
+
+    // The meaning counts against the review; then Luisteren, veiled until Space.
     app.press(cx, "v h 3");
     assert!(app.read(cx, |app| app.study.reviewed_today == 1 && app.notice.as_ref().is_some_and(|n| n.is_error)), "no voice installed");
     app.click(cx, ["mode-Luisteren".into()]);
