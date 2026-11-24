@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use gpui_kit::{App, Context, Div, ParentElement as _};
+use gpui_kit::{App, Context, Div, ParentElement as _, Task};
 
 use crate::app::FlashcardsApp;
 use crate::recorder::{self, Captured, Recording};
@@ -13,6 +13,7 @@ use crate::ui::{hint, level_meter};
 #[derive(Default)]
 pub struct Capture {
     recording: Option<Recording>,
+    poller: Option<Task<()>>,
     level: f32,
 }
 
@@ -54,7 +55,7 @@ impl Capture {
 
 impl FlashcardsApp {
     pub fn is_capturing(&self) -> bool {
-        self.study.attempt.capture.is_on() || self.mic_test.is_recording()
+        self.study.attempt.capture.is_on() || self.mic_test.is_recording() || self.talk.capture.is_on()
     }
 
     /// Records into `slot` and hands the result to `done`. With `--recording`,
@@ -74,12 +75,12 @@ impl FlashcardsApp {
             Ok(recording) => slot(self).recording = Some(recording),
             Err(err) => return done(self, Err(err), cx),
         }
-        cx.spawn(async move |this, cx| {
+        // Dropping the slot cancels its poller as well as its recording.
+        slot(self).poller = Some(cx.spawn(async move |this, cx| {
             while this.update(cx, |this, cx| this.poll_capture(slot, done, cx)).unwrap_or(false) {
                 cx.background_executor().timer(Duration::from_millis(50)).await;
             }
-        })
-        .detach();
+        }));
     }
 
     /// Refreshes the level meter, or hands a finished recording to `done`.

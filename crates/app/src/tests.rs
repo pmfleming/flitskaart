@@ -1,9 +1,10 @@
 //! The whole app in a headless window: real clicks and keys through each screen.
 
 use dutch_flashcards_core::Store;
+use dutch_flashcards_core::conversation::DUTCH_NEWS_TOPIC;
 use dutch_flashcards_core::llm::{Cli, Effort, ModelChoice};
 use dutch_flashcards_core::paths::Paths;
-use dutch_flashcards_core::speech::write_wav_16k;
+use dutch_flashcards_core::speech::{Listener, write_wav_16k};
 use dutch_flashcards_core::store::{Appearance, Mode};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
@@ -13,7 +14,7 @@ use gpui_kit::{
 
 use crate::app::{FlashcardsApp, Screen};
 
-/// The app on an empty deck in a temporary folder, without voices or Whisper.
+/// The app on an empty deck in a temporary folder, without voices.
 struct Harness {
     window: AnyWindowHandle,
     app: Entity<FlashcardsApp>,
@@ -48,6 +49,26 @@ impl Harness {
 
     fn show(&self, cx: &mut TestAppContext, screen: Screen) {
         self.act(cx, |app, window, cx| app.show(screen, window, cx));
+    }
+
+    fn script(&self, name: &str, script: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = self.dir.path().join(name);
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    fn recording(&self, cx: &mut TestAppContext, whisper_script: &str) {
+        let whisper = self.script("whisper", whisper_script);
+        let wav = self.dir.path().join("test.wav");
+        let speech: Vec<f32> = (0..16_000).map(|i| 0.3 * (i as f32 * 0.17).sin()).collect();
+        write_wav_16k(&wav, &speech, 16_000, 1).unwrap();
+        self.act(cx, |app, _, _| {
+            // A nonempty file is enough for the stand-in program's model.
+            app.listener = Listener::with_program(whisper, wav.clone());
+            app.fake_recording = Some(wav);
+        });
     }
 
     /// Clicks each element in turn.
@@ -102,6 +123,13 @@ fn a_deck_from_paste_to_practice(cx: &mut TestAppContext) {
     assert!(app.read(cx, |app| app.study.card.as_ref().is_some_and(|card| card.id != skipped) && app.study.reviewed_today == 0));
     assert_eq!(app.read(cx, |app| app.store.card(skipped).unwrap().unwrap().reviews), 0);
     let dutch = app.read(cx, |app| app.study.card.as_ref().unwrap().dutch.clone());
+    app.recording(cx, "#!/bin/sh\nprintf 'Hallo   daar.\\n'\n");
+    app.press(cx, "r");
+    assert!(app.read(cx, |app| {
+        let attempt = &app.study.attempt;
+        !attempt.judging && attempt.has_recording && attempt.speech.as_ref().is_some_and(|speech| speech.heard == "Hallo daar.")
+    }));
+    assert!(app.dir.path().join("recordings/laatste.wav").exists());
     let letters: Vec<String> = dutch.chars().filter(|c| c.is_alphanumeric()).map(|c| c.to_lowercase().to_string()).collect();
     app.press(cx, "w q");
     assert!(app.read(cx, |app| app.study.attempt.writing.as_ref().is_some_and(|w| w.cursor() == Some(1))), "a wrong letter fills its blank");
@@ -154,9 +182,7 @@ fn a_deck_from_paste_to_practice(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn settings_and_the_microphone_test(cx: &mut TestAppContext) {
     let app = Harness::open(cx);
-    let wav = app.dir.path().join("test.wav");
-    let speech: Vec<f32> = (0..32_000).map(|i| if i > 4_000 { 0.3 * (i as f32 * 0.17).sin() } else { 0.0 }).collect();
-    write_wav_16k(&wav, &speech, 16_000, 1).unwrap();
+    app.recording(cx, "#!/bin/sh\necho 'testfout' >&2\nexit 1\n");
     // The logged-in tools as Instellingen would find them, so none are run here.
     let model = |cli, id: &str, efforts: Vec<Effort>, default_effort| ModelChoice { cli, id: id.into(), name: id.into(), efforts, default_effort };
     let choices = vec![
@@ -164,12 +190,13 @@ fn settings_and_the_microphone_test(cx: &mut TestAppContext) {
         model(Cli::ClaudeCode, "sonnet", Effort::ALL.to_vec(), Effort::Medium),
         model(Cli::Antigravity, "gemini-x", vec![Effort::Low, Effort::High], Effort::Low),
     ];
-    app.act(cx, |app, _, _| (app.fake_recording, app.llm_choices) = (Some(wav), Some(choices)));
+    app.act(cx, |app, _, _| app.llm_settings.choices = Some(choices));
     app.show(cx, Screen::Settings);
     app.click(cx, ["vrouw".into(), "licht".into(), "more".into(), "mic-test".into()]);
     let settings = app.read(cx, |app| app.settings.clone());
     assert_eq!((settings.voice_id(), settings.appearance, settings.new_per_day), ("nathalie", Appearance::Light, 11));
     assert!(app.dir.path().join("recordings/microfoontest.wav").exists(), "the stand-in recording is saved for playback");
+    assert!(app.read(cx, |app| !app.mic_test.is_busy()));
     app.click(cx, ["fewer".into()]);
     assert_eq!(app.read(cx, |app| app.store.settings().unwrap().new_per_day), 10, "saved as it changes");
     // The tool, model and effort go to every answer, and are saved.
@@ -207,16 +234,45 @@ case "$*" in
 esac
 "#;
 
+#[gpui_kit::test]
+fn dutch_news_offers_todays_articles_before_starting_the_conversation(cx: &mut TestAppContext) {
+    let app = Harness::open(cx);
+    let program = app.script("claude", r#"#!/bin/sh
+request=$(cat)
+case "$request" in
+  *'"dutch_news":true'*)
+    today=${request##*'"today":"'}
+    today=${today%%'"'*}
+    printf '{"modelUsage":{"sonnet":{"webSearchRequests":1}},"structured_output":{"sources":[{"title":"Oud bericht","url":"https://example.org/oud","date":"2000-01-01","facts":"Dit verscheen eerder."},{"title":"De dijken","url":"https://example.org/dijken","date":"%s","facts":"Er wordt gewerkt aan de dijken."}]}}\n' "$today" ;;
+  *'"angle":"De dijken"'*)
+    echo '{"structured_output":{"corrected":"","explanation":"","reply":"Wat vind je van de plannen voor de dijken?","reply_english":"What do you think of the plans for the dikes?"}}' ;;
+  *) exit 1 ;;
+esac
+"#);
+    app.act(cx, |app, _, _| app.llm.program = program);
+    app.show(cx, Screen::Talk);
+    app.click(cx, [format!("topic-{DUTCH_NEWS_TOPIC}").into()]);
+    assert!(app.read(cx, |app| {
+        matches!(app.talk.options.as_slice(), [article] if article.title == "De dijken")
+            && app.talk.current.as_ref().is_some_and(|conversation| conversation.lines.is_empty())
+    }));
+
+    app.click(cx, ["talk-more-options".into(), row("talk-option", 0)]);
+    assert!(app.read(cx, |app| app.talk.current.as_ref().is_some_and(|conversation| {
+        conversation.angle.as_deref() == Some("De dijken")
+            && conversation.sources.len() == 1
+            && conversation.lines.first().is_some_and(|line| line.dutch.contains("dijken"))
+    })));
+}
+
 /// Gesprek: a failed start, then a conversation whose English, unclear words,
 /// opened meaning and correction become drafts when it ends; every piece plays.
 
 #[gpui_kit::test]
 fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
-    use std::os::unix::fs::PermissionsExt as _;
     let app = Harness::open(cx);
-    let program = app.dir.path().join("claude");
-    std::fs::write(&program, FAKE_CLAUDE).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let program = app.script("claude", FAKE_CLAUDE);
+    app.recording(cx, "#!/bin/sh\necho 'Ik heb naar de market gegaan'\n");
     let missing = app.dir.path().join("geen-claude");
     app.act(cx, |app, _, _| app.llm.program = missing.clone());
     app.show(cx, Screen::Talk);
@@ -238,12 +294,13 @@ fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
     let urls = app.read(cx, |app| app.talk.current.as_ref().unwrap().sources.iter().map(|s| s.url.clone()).collect::<Vec<_>>());
     assert_eq!(urls, ["https://example.org/fiets", "https://example.org/nieuw"]);
     assert!(app.read(cx, |app| !app.talk.refreshing && app.notice.as_ref().is_some_and(|n| n.text.contains("1 nieuwe bron"))));
-    app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Ik heb naar de market gegaan", window, cx)));
-    app.click(cx, ["talk-send".into()]);
-    let corrected = app.read(cx, |app| app.talk.current.as_ref().unwrap().lines[1].corrected.clone());
-    assert_eq!(corrected.as_deref(), Some("Ik ben naar de markt gegaan."));
-    let field = app.read(cx, |app| app.talk.message.clone());
-    assert!(cx.read(|cx| field.read(cx).value().is_empty()) && app.read(cx, |app| app.talk.pending.is_none()), "sent and answered");
+    // The sources fold out under the header, newest first.
+    app.click(cx, ["talk-all-sources".into(), row("talk-source", 0), "talk-all-sources".into()]);
+    app.click(cx, ["talk-speak".into()]);
+    assert!(app.read(cx, |app| {
+        let line = &app.talk.current.as_ref().unwrap().lines[1];
+        line.spoken && line.corrected.as_deref() == Some("Ik ben naar de markt gegaan.") && app.talk.pending.is_none()
+    }), "spoken, transcribed and answered");
     app.click(cx, ["line-0".into(), "line-1-play".into(), "english-1-0".into(), "unclear-0-0".into(), row("line-slow", 2)]);
     assert!(app.read(cx, |app| app.notice.as_ref().is_some_and(|n| n.is_error)), "each tries to play; no voice is installed here");
     assert_eq!(app.read(cx, |app| app.talk.current.as_ref().unwrap().gaps()), 2, "the English and the unclear words");
@@ -257,18 +314,16 @@ fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
     // The answer's token use is kept with the deck, for Instellingen.
     let used = app.read(cx, |app| app.store.usage_summary(chrono::Utc::now(), 7).unwrap());
     assert_eq!((used.total.calls, used.total.tokens(), used.by_model[0].0.as_str()), (1, 150, "claude-sonnet-5-5"));
-    app.act(cx, |app, _, _| app.llm_choices = Some(Vec::new()));
+    app.act(cx, |app, _, _| app.llm_settings.choices = Some(Vec::new()));
     app.show(cx, Screen::Settings);
     app.click(cx, ["usage-per-day".into()]);
-    assert!(app.read(cx, |app| app.usage_by_day), "the breakdown turns to days");
-    app.show(cx, Screen::Talk);
-
+    assert!(app.read(cx, |app| app.llm_settings.usage_by_day), "the breakdown turns to days");
     app.show(cx, Screen::Talk);
     app.click(cx, ["topic-Het weekend".into(), row("talk-option", 0)]);
-    app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Hoe vraag ik beleefd om hulp?", window, cx)));
+    app.act(cx, |app, window, cx| app.talk.message.set_value("Hoe vraag ik beleefd om hulp?", window, cx));
     app.click(cx, ["talk-send".into()]);
-    assert!(app.read(cx, |app| app.talk.current.as_ref().unwrap().transcript().contains("Leervraag: Beleefd om hulp vragen")));
-    app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Tot ziens!", window, cx)));
+    assert!(app.read(cx, |app| app.talk.current.as_ref().unwrap().transcript(None).contains("Leervraag: Beleefd om hulp vragen")));
+    app.act(cx, |app, window, cx| app.talk.message.set_value("Tot ziens!", window, cx));
     app.click(cx, ["talk-send".into()]);
     assert!(app.read(cx, |app| app.talk.current.is_none() && app.drafts.len() == 2), "goodbye closes and reviews the transcript");
     assert_eq!(app.read(cx, |app| app.store.drafts().unwrap()[1].dutch.clone()), "Zou u mij kunnen helpen?");
@@ -276,18 +331,110 @@ fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
     app.show(cx, Screen::Talk);
     app.click(cx, ["talk-recap".into()]);
     app.click(cx, ["topic-Het weekend".into(), row("talk-option", 2)]);
-    app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Hoe vraag ik beleefd om hulp?", window, cx)));
+    app.act(cx, |app, window, cx| app.talk.message.set_value("Hoe vraag ik beleefd om hulp?", window, cx));
     app.click(cx, ["talk-send".into()]);
     app.act(cx, |app, _, _| app.llm.program = missing);
     app.click(cx, ["talk-finish".into()]);
     assert!(app.read(cx, |app| app.talk.current.is_none() && app.talk.error.is_some() && app.drafts.len() == 2));
+    // Concepten says it failed, and tries again from there.
+    assert!(app.read(cx, |app| app.screen == Screen::Drafts && app.making.is_none() && app.making_failed.is_some()));
     app.act(cx, |app, _, _| app.llm.program = program);
-    app.click(cx, ["talk-retry-cards".into()]);
-    assert_eq!(app.read(cx, |app| app.drafts.len()), 3);
+    app.click(cx, ["making-retry".into()]);
+    assert_eq!(app.read(cx, |app| (app.drafts.len(), app.making_failed.is_none(), app.making.is_none())), (3, true, true));
+    // The runs that made cards were timed, with their model and length, for the next estimate.
+    app.read(cx, |app| {
+        let runs = app.store.drafting_runs().unwrap();
+        assert_eq!(runs.len(), 3, "the three that made cards, not the one that failed");
+        assert!(runs.iter().all(|run| run.model == app.settings.model && run.effort == app.settings.effort.as_str() && run.chars > 20));
+    });
+    // Gesprek no longer shows the failure either.
+    app.show(cx, Screen::Talk);
+    assert!(app.read(cx, |app| app.talk.error.is_none()));
 
     // Each conversation counts towards Voortgang from its first answered line.
     app.show(cx, Screen::Progress);
     let progress = app.read(cx, |app| app.progress.clone().unwrap());
     assert_eq!(progress.talking.map(|t| (t.talks, t.lines)), Some((3, 4)));
     assert_eq!((progress.started, progress.streak.days, progress.reviews), (true, 1, 0), "a conversation keeps the streak");
+}
+
+/// A bad export of the window's icon fails here, not quietly at start-up.
+#[test]
+fn the_window_icon_loads() {
+    let icon = crate::app_icon().expect("the icon decodes");
+    assert_eq!((icon.width(), icon.height()), (256, 256));
+}
+
+/// Gesprek with the partner's opening line, waiting for the learner's answer.
+fn open_conversation(app: &Harness, cx: &mut TestAppContext) {
+    use dutch_flashcards_core::conversation::{Conversation, Reply};
+    let mut conversation = Conversation::new("");
+    conversation.add_turn(None, Reply { reply: "Hallo! Hoe gaat het?".into(), ..Default::default() });
+    app.act(cx, |app, _, _| app.talk.current = Some(conversation));
+    app.show(cx, Screen::Talk);
+}
+
+/// Dutch the dictionary does not know is underlined in the answer, but not
+/// the word still being typed.
+#[gpui::test]
+fn unknown_dutch_in_an_answer_is_underlined(cx: &mut TestAppContext) {
+    let app = Harness::open(cx);
+    open_conversation(&app, cx);
+    let underlined = |cx: &mut TestAppContext| cx.read(|cx| app.app.read(cx).talk.message.underlined(cx));
+    app.act(cx, |app, window, cx| app.talk.message.set_value("Wij hebben het al gezeggd.", window, cx));
+    assert_eq!(underlined(cx), ["gezeggd"]);
+    app.act(cx, |app, window, cx| app.talk.message.set_value("", window, cx));
+
+    app.act(cx, |app, window, cx| app.talk.focus(window, cx));
+    app.input(cx, |window, cx| window.input("Ik heb het gezeggd", cx));
+    assert!(underlined(cx).is_empty(), "still typing it");
+    app.input(cx, |window, cx| window.input(" en", cx));
+    assert_eq!(underlined(cx), ["gezeggd"]);
+    app.press(cx, "shift-enter");
+    let raw = cx.read(|cx| app.app.read(cx).talk.message.state.read(cx).value().to_string());
+    assert_eq!(raw, "Ik heb het gezeggd en", "one line only");
+}
+
+/// Right-clicking an underlined word offers what was meant, and choosing it fixes the word.
+#[gpui::test]
+fn the_right_click_menu_fixes_a_word(cx: &mut TestAppContext) {
+    let app = Harness::open(cx);
+    open_conversation(&app, cx);
+    // Long enough that the middle of the field, where the click lands, is on a word.
+    let answer = ["gezeggd"; 12].join(" ");
+    app.act(cx, |app, window, cx| app.talk.message.set_value(&answer, window, cx));
+    let field = app.read(cx, |app| app.talk.message.state.entity_id());
+    app.input(cx, |window, cx| window.right_click(("input", field), cx));
+    app.press(cx, "down enter");
+    let answer = cx.read(|cx| app.app.read(cx).talk.message.value(cx));
+    assert_eq!(answer.matches("gezegd ").count(), 1, "{answer}");
+}
+
+/// The conversation shows which model answers, and a click opens the choice.
+#[gpui::test]
+fn the_conversation_shows_its_model_and_opens_the_choice(cx: &mut TestAppContext) {
+    let app = Harness::open(cx);
+    open_conversation(&app, cx);
+    app.act(cx, |app, _, _| (app.settings.cli, app.settings.model, app.settings.effort) = (Cli::ClaudeCode, "opus".into(), Effort::High));
+    app.click(cx, ["talk-llm".into()]);
+    assert_eq!(app.read(cx, |app| app.screen), Screen::Settings);
+}
+
+/// Making cards from a pasted text moves to Concepten; when the model fails,
+/// Concepten says so and leads back to the text, still in Toevoegen.
+#[gpui::test]
+fn a_failed_paste_leads_back_to_its_text(cx: &mut TestAppContext) {
+    let app = Harness::open(cx);
+    let missing = app.dir.path().join("no-such-program");
+    app.act(cx, |app, window, cx| {
+        app.llm.program = missing;
+        app.add.snippet.update(cx, |snippet, cx| snippet.set_value("Ik heb gisteren lang gewerkt.", window, cx));
+    });
+    app.show(cx, Screen::Add);
+    app.click(cx, ["make".into()]);
+    assert!(app.read(cx, |app| app.screen == Screen::Drafts && app.making.is_none() && app.making_failed.is_some()));
+    app.click(cx, ["making-back".into()]);
+    assert_eq!(app.read(cx, |app| app.screen), Screen::Add);
+    let text = cx.read(|cx| app.app.read(cx).add.snippet.read(cx).value().to_string());
+    assert_eq!(text, "Ik heb gisteren lang gewerkt.");
 }

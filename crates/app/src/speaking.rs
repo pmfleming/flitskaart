@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use dutch_flashcards_core::Grade;
-use dutch_flashcards_core::speech::{Assessment, assess, speech_label, write_wav_16k};
+use dutch_flashcards_core::speech::{Assessment, assess, speech_label};
 use dutch_flashcards_core::store::Mode;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, h_flex, v_flex};
 use gpui_kit::{AnyElement, App, Context, Div, FontWeight, Hsla, IntoElement, ParentElement as _, Styled as _, div, px};
@@ -72,7 +72,7 @@ impl FlashcardsApp {
                 Loudness::Quiet => attempt.speech_note = Some(loudness.verdict().into()),
                 Loudness::Good | Loudness::Clipped => {}
             }
-            write_wav_16k(&path, &captured.samples, captured.rate, captured.channels).map(Some)
+            captured.write_wav(&path).map(Some)
         });
         match saved {
             Ok(Some(())) => (attempt.has_recording, attempt.judging) = (true, true),

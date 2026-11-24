@@ -185,28 +185,31 @@ mod tests {
     }
 
     #[test]
-    fn spaces_and_punctuation_are_given() {
-        let writing = Writing::new(" Ja, één! ");
+    fn case_and_accents_are_ignored_and_punctuation_is_given() {
+        let mut writing = Writing::new(" Ja, één! ");
         assert_eq!(slots(&writing), [Slot::Blank, Slot::Blank, Slot::Given, Slot::Given, Slot::Blank, Slot::Blank, Slot::Blank, Slot::Given]);
         assert_eq!(writing.cursor(), Some(0));
         assert!(Writing::new("?!").is_done(), "nothing to write");
-    }
-
-    #[test]
-    fn all_right_ignoring_case_and_accents_finishes_by_itself() {
-        let mut writing = Writing::new("Ja, één!");
         assert_eq!(type_all(&mut writing, "j a,een"), [Typed::Right, Typed::Ignored, Typed::Right, Typed::Ignored, Typed::Right, Typed::Right, Typed::Right]);
         let result = writing.result().unwrap();
         assert_eq!((result.accuracy, result.grade), (1.0, Grade::Easy));
     }
 
     #[test]
-    fn a_wrong_letter_fills_its_blank_and_the_next_waits() {
+    fn wrong_letters_fill_their_blanks_and_finishing_shows_corrections() {
         let mut writing = Writing::new("ik ben");
         assert_eq!(type_all(&mut writing, "ixbem"), [Typed::Right, Typed::Wrong, Typed::Right, Typed::Right, Typed::Wrong]);
         assert_eq!(slots(&writing), [Slot::Right, Slot::Wrong('x'), Slot::Given, Slot::Right, Slot::Right, Slot::Wrong('m')]);
         assert!(writing.is_full() && !writing.is_done(), "full, waiting to be fixed or finished");
         assert_eq!(writing.type_char('n'), Typed::Ignored);
+        writing.finish();
+        assert_eq!(slots(&writing)[5], Slot::Shown);
+
+        let mut incomplete = Writing::new("ik ben");
+        type_all(&mut incomplete, "ix");
+        incomplete.finish();
+        assert_eq!(slots(&incomplete), [Slot::Right, Slot::Shown, Slot::Given, Slot::Shown, Slot::Shown, Slot::Shown]);
+        assert_eq!(incomplete.result().unwrap().grade, Grade::DontKnow);
     }
 
     #[test]
@@ -220,15 +223,6 @@ mod tests {
         assert!(writing.is_done());
         assert_eq!(writing.result().unwrap().accuracy, 0.75);
         assert!(!writing.back(), "a finished writing stays finished");
-    }
-
-    #[test]
-    fn finishing_shows_the_wrong_and_missing_letters_corrected() {
-        let mut writing = Writing::new("ik ben");
-        type_all(&mut writing, "ix");
-        writing.finish();
-        assert_eq!(slots(&writing), [Slot::Right, Slot::Shown, Slot::Given, Slot::Shown, Slot::Shown, Slot::Shown]);
-        assert_eq!(writing.result().unwrap().grade, Grade::DontKnow);
     }
 
     #[test]

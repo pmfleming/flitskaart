@@ -13,6 +13,7 @@ use gpui_kit::{
 
 use crate::app::{FlashcardsApp, Screen};
 use crate::icons;
+use crate::making::Origin;
 use crate::ui::{card_box, explained, hint, keycap_primary, titled};
 
 const STEER_PRESETS: [&str; 3] = ["alleen de correcties", "max 3 kaarten", "alleen nieuwe woorden"];
@@ -69,28 +70,32 @@ impl FlashcardsApp {
             return;
         }
         self.add.busy = true;
-        cx.notify();
+        self.start_making(Origin::Add, &format!("{snippet}\n{steer}"), cx);
         let (limit, llm) = (limit_from(&steer), self.llm.clone());
         // The job hands the text back with its result, for storing alongside the drafts.
-        let job = cx.background_executor().spawn(async move {
+        let job = move || {
             let result = drafting::draft_cards(&llm, &snippet, &steer, limit);
             (snippet, steer, result)
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let (snippet, steer, result) = job.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.add.busy = false;
-                match result {
-                    Ok(cards) if cards.is_empty() => {
-                        this.add.error = Some("Het taalmodel vond niets om te leren in dit stuk.".into());
-                    }
-                    Ok(cards) => this.store_drafts(&snippet, &steer, cards, window, cx),
-                    Err(err) => this.add.error = Some(crate::logging::error("toevoegen", format!("{err:#}")).into()),
+        };
+        self.in_background_with_window(cx, job, |this, (snippet, steer, result), window, cx| {
+            this.add.busy = false;
+            match result {
+                Ok(cards) if cards.is_empty() => {
+                    let message = "Het taalmodel vond niets om te leren in dit stuk.";
+                    this.add.error = Some(message.into());
+                    this.making_failed(Origin::Add, message);
                 }
-                cx.notify();
-            });
-        })
-        .detach();
+                Ok(cards) => {
+                    this.making_done();
+                    this.store_drafts(&snippet, &steer, cards, window, cx);
+                }
+                Err(err) => {
+                    let message = crate::logging::error("toevoegen", format!("{err:#}"));
+                    this.making_failed(Origin::Add, format!("Je tekst staat nog in Toevoegen. ({message})"));
+                    this.add.error = Some(message.into());
+                }
+            }
+        });
     }
 
     fn store_drafts(&mut self, snippet: &str, steer: &str, cards: Vec<NewCard>, window: &mut Window, cx: &mut Context<Self>) {

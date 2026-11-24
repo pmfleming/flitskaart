@@ -3,7 +3,7 @@
 //! the source for drafts based on the learner's needs.
 
 mod research;
-pub use research::{Search, Source, look_up};
+pub use research::{DUTCH_NEWS_TOPIC, Search, Source, look_up};
 
 use anyhow::{Context as _, Result, bail};
 
@@ -180,6 +180,28 @@ impl Line {
             Who::Learner => self.english_used.len(),
         }
     }
+
+    fn append_to(&self, out: &mut String) {
+        let who = if self.who == Who::Partner { "Partner" } else { "Ik" };
+        out.push_str(&format!("\n{who}: {}", self.dutch));
+        if let Some(corrected) = &self.corrected {
+            out.push_str(&format!("\n  Correctie: {corrected}"));
+        }
+        if !self.explanation.is_empty() {
+            out.push_str(&format!("\n  Uitleg: {}", self.explanation));
+        }
+        for used in &self.english_used {
+            out.push_str(&format!("\n  In het Engels gezegd: {} = {}", used.english, used.dutch));
+        }
+        if !self.learning_need.is_empty() {
+            out.push_str(&format!("\n  Leervraag: {}", self.learning_need));
+        }
+        if !self.not_understood.is_empty() {
+            out.push_str(&format!("\n  Niet begrepen: {}", self.not_understood.join(", ")));
+        } else if self.looked_up {
+            out.push_str("\n  Niet begrepen: de hele zin (vertaling bekeken)");
+        }
+    }
 }
 
 /// A sentence from the learner, typed or spoken.
@@ -213,7 +235,7 @@ pub struct Reply {
 
 /// Asks Claude for the next turn. Blocks for several seconds, so call it off
 /// the UI thread. `request` comes from [`Conversation::request`].
-pub fn next_turn(llm: &Llm, request: &str) -> Result<Reply> {
+fn next_turn(llm: &Llm, request: &str) -> Result<Reply> {
     let reply: Reply = serde_json::from_value(llm.ask(INSTRUCTIONS, SCHEMA, request)?)
         .context("Het taalmodel antwoordde in een onverwachte vorm")?;
     if reply.reply.trim().is_empty() {
@@ -298,10 +320,6 @@ impl Conversation {
         }
     }
 
-    pub fn add_unanswered(&mut self, said: Said) {
-        self.lines.push(Line::learner(said.text, said.spoken));
-    }
-
     /// Adds the learner's sentence, with its correction and the English they
     /// used, and the partner's reply. Words they didn't understand go with the
     /// partner line before it.
@@ -355,32 +373,17 @@ impl Conversation {
 
     /// The whole conversation as text, with what the learner didn't know under
     /// each line: what drafting reads, and what Concepten shows as the source.
-    pub fn transcript(&self) -> String {
+    pub fn transcript(&self, pending: Option<&Said>) -> String {
         let topic = if self.topic.is_empty() { "vrij onderwerp" } else { &self.topic };
         let mut out = format!("Gesprek over: {topic}\n");
         if let Some(partner) = &self.partner {
             out.push_str(&format!("Gesprekspartner: {} ({})\n", partner.name, partner.role));
         }
         for line in &self.lines {
-            let who = if line.who == Who::Partner { "Partner" } else { "Ik" };
-            out.push_str(&format!("\n{who}: {}", line.dutch));
-            if let Some(corrected) = &line.corrected {
-                out.push_str(&format!("\n  Correctie: {corrected}"));
-            }
-            if !line.explanation.is_empty() {
-                out.push_str(&format!("\n  Uitleg: {}", line.explanation));
-            }
-            for used in &line.english_used {
-                out.push_str(&format!("\n  In het Engels gezegd: {} = {}", used.english, used.dutch));
-            }
-            if !line.learning_need.is_empty() {
-                out.push_str(&format!("\n  Leervraag: {}", line.learning_need));
-            }
-            if !line.not_understood.is_empty() {
-                out.push_str(&format!("\n  Niet begrepen: {}", line.not_understood.join(", ")));
-            } else if line.looked_up {
-                out.push_str("\n  Niet begrepen: de hele zin (vertaling bekeken)");
-            }
+            line.append_to(&mut out);
+        }
+        if let Some(said) = pending {
+            out.push_str(&format!("\nIk: {}", said.text));
         }
         for source in &self.sources {
             out.push_str(&format!("\nBron: {} {} · {}", source.title, source.date, source.url));
@@ -390,9 +393,9 @@ impl Conversation {
     }
 
     /// Read learner turns even if none of the per-turn hints picked up a need.
-    pub fn card_request(&self) -> Option<(&'static str, usize)> {
+    pub fn card_request(&self, pending: Option<&Said>) -> Option<(&'static str, usize)> {
         let gaps = self.gaps();
-        (self.has_learner_lines() || gaps > 0).then(|| (CARD_STEER, (gaps + 2).clamp(6, 20)))
+        (pending.is_some() || gaps > 0 || self.has_learner_lines()).then(|| (CARD_STEER, (gaps + 2).clamp(6, 20)))
     }
 }
 
@@ -447,7 +450,11 @@ mod tests {
     #[test]
     fn english_used_and_lines_not_understood_are_what_the_learner_did_not_know() {
         let mut conversation = started();
-        assert_eq!(conversation.card_request(), None, "nothing yet");
+        assert_eq!(conversation.card_request(None), None, "nothing yet");
+        let pending = typed("Wat betekent gedaan?");
+        assert_eq!(conversation.card_request(Some(&pending)).map(|(_, limit)| limit), Some(6));
+        assert!(conversation.transcript(Some(&pending)).ends_with("\nIk: Wat betekent gedaan?\n"));
+        assert_eq!(conversation.lines.len(), 1);
         let mut answer = reply("Wat betekent gedaan? Ik heb een fiets gekocht.", "", "Gedaan: wat je deed. Wat voor fiets?");
         answer.english_used = vec![Translation { english: " bike ".into(), dutch: "de fiets".into() }, Translation::default()];
         answer.not_understood = vec!["gedaan".into(), " ".into()];
@@ -462,7 +469,7 @@ mod tests {
         assert!(conversation.lines[2].looked_up && !conversation.lines[2].meaning_shown, "closing the meaning again still counts");
         conversation.toggle_meaning(1);
         assert!(!conversation.lines[1].looked_up, "the learner's own lines have no meaning to open");
-        assert!(conversation.card_request().is_some_and(|(steer, limit)| steer.contains("In het Engels gezegd") && limit == 6));
+        assert!(conversation.card_request(None).is_some_and(|(steer, limit)| steer.contains("In het Engels gezegd") && limit == 6));
     }
 
     #[test]
@@ -480,8 +487,8 @@ mod tests {
         assert_eq!(request["update_memory"], true);
         assert_eq!(request["dialogue"].as_array().unwrap().len(), super::HISTORY);
         assert_eq!(request["memory"], "De leerling wil graag beleefd om hulp vragen.");
-        assert!(conversation.transcript().contains("Leervraag: Formeel om hulp vragen: Zou u mij kunnen helpen?"));
-        assert!(conversation.card_request().is_some());
+        assert!(conversation.transcript(None).contains("Leervraag: Formeel om hulp vragen: Zou u mij kunnen helpen?"));
+        assert!(conversation.card_request(None).is_some());
     }
 
     #[test]
@@ -494,7 +501,7 @@ mod tests {
         conversation.toggle_meaning(2);
         assert!(conversation.has_learner_lines());
         assert_eq!(
-            conversation.transcript(),
+            conversation.transcript(None),
             "Gesprek over: het weekend\n\nPartner: Hoi! Wat heb je dit weekend gedaan?\n\
              Ik: Ik heb naar de market gegaan.\n  Correctie: Ik ben naar de markt gegaan.\n  Uitleg: Bij gaan hoort zijn.\n\
              \x20 In het Engels gezegd: market = de markt\n\
@@ -521,29 +528,39 @@ mod tests {
     }
 
     #[test]
-    fn a_search_leaves_out_what_is_known() {
+    fn a_turn_can_look_up_new_sources_but_must_answer() {
         let dir = tempfile::tempdir().unwrap();
         let program = dir.path().join("claude");
         let found = |url: &str| format!(r#"{{"title":"T","url":"{url}","date":"2026-11-02","facts":"F"}}"#);
         let urls = ["https://example.org/a", "https://example.org/b", "https://example.org/b", "http://example.org/c", "https://example.org/d", "https://example.org/e"];
         let sources: Vec<_> = urls.iter().map(|url| found(url)).collect();
         let envelope = format!(r#"{{"is_error":false,"modelUsage":{{"sonnet":{{"webSearchRequests":1}}}},"structured_output":{{"sources":[{}]}}}}"#, sources.join(","));
-        std::fs::write(&program, format!("#!/bin/sh\ncat > /dev/null\necho '{envelope}'\n")).unwrap();
+        let reply = |text, query| {
+            serde_json::json!({"structured_output": {
+                "corrected": "", "explanation": "", "reply": text, "reply_english": "", "lookup_query": query
+            }})
+        };
+        let (empty, question, answer) = (reply(" ", ""), reply("Ik zoek het uit.", "markt"), reply("De markt is open.", ""));
+        let script = format!(r#"#!/bin/sh
+request=$(cat)
+case "$*" in
+  *'"sources"'*) echo '{envelope}' ;;
+  *) case "$request" in
+    *'Lookup results:'*) echo '{answer}' ;;
+    markt) echo '{question}' ;;
+    *) echo '{empty}' ;;
+  esac ;;
+esac
+"#);
+        std::fs::write(&program, script).unwrap();
         std::fs::set_permissions(&program, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
         let llm = Llm { program, ..Llm::new(crate::llm::Cli::ClaudeCode, "sonnet") };
         let options = super::look_up(&llm, &Search::options("x", vec!["https://example.org/a".into()])).unwrap();
         let urls: Vec<_> = options.iter().map(|source| source.url.as_str()).collect();
         assert_eq!(urls, ["https://example.org/b", "https://example.org/d", "https://example.org/e"], "known, repeated and plain http left out; three at most");
-    }
-
-    #[test]
-    fn an_empty_reply_is_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let program = dir.path().join("claude");
-        let envelope = r#"{"is_error":false,"result":"","structured_output":{"corrected":"","explanation":"","reply":" ","reply_english":""}}"#;
-        std::fs::write(&program, format!("#!/bin/sh\ncat > /dev/null\necho '{envelope}'\n")).unwrap();
-        std::fs::set_permissions(&program, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-        let llm = Llm { program, ..Llm::new(crate::llm::Cli::ClaudeCode, "sonnet") };
+        let (reply, sources) = super::continue_turn(&llm, "markt").unwrap();
+        assert_eq!(reply.reply, "De markt is open.");
+        assert_eq!(sources.len(), 2);
         assert!(next_turn(&llm, "Topic: x").unwrap_err().to_string().contains("geen antwoord"));
     }
 }

@@ -2,8 +2,6 @@
 //! the schema strictly, so the schema is first made strict: every property
 //! required, the optional ones allowed to be `null` (dropped again after).
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use anyhow::{Context as _, Result, bail};
 use serde_json::{Value, json};
 
@@ -11,10 +9,12 @@ use super::{Llm, Usage, json_in, without_nulls};
 
 pub(super) fn ask(llm: &Llm, system: &str, schema: &str, request: &str) -> Result<Value> {
     let schema: Value = serde_json::from_str(schema).context("het JSON-schema is ongeldig")?;
-    let file = SchemaFile::write(&strict(schema))?;
+    let file = tempfile::NamedTempFile::new().context("het schema kon niet worden aangemaakt")?;
+    serde_json::to_writer(file.as_file(), &strict(schema)).context("het schema kon niet worden weggeschreven")?;
+    let path = file.path().to_str().context("het pad naar het schema is geen UTF-8")?;
     let effort = format!("model_reasoning_effort=\"{}\"", llm.effort.as_str());
     let mut args = vec!["exec", "--json", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never"];
-    args.extend(["--output-schema", file.path(), "-c", &effort]);
+    args.extend(["--output-schema", path, "-c", &effort]);
     if !llm.model.is_empty() {
         args.extend(["--model", &llm.model]);
     }
@@ -22,10 +22,7 @@ pub(super) fn ask(llm: &Llm, system: &str, schema: &str, request: &str) -> Resul
     let input = format!("{system}\n\nAntwoord direct, zonder gereedschap te gebruiken.\n\n{request}");
     let ran = llm.run(&args, &input)?;
     llm.note(usage_in(llm, &ran.stdout));
-    match reply(&ran.stdout) {
-        Err(_) if !ran.ok && !ran.problem.is_empty() => bail!("Codex gaf een fout: {}", ran.problem),
-        result => result,
-    }
+    ran.reply(llm.cli, reply)
 }
 
 /// The last message's JSON, or the error Codex reported.
@@ -69,60 +66,36 @@ fn usage_in(llm: &Llm, stdout: &str) -> Vec<Usage> {
 
 /// The schema as OpenAI's strict mode wants it.
 fn strict(mut schema: Value) -> Value {
-    if let Some(object) = schema.as_object_mut() {
-        if let Some(properties) = object.get("properties").and_then(Value::as_object).cloned() {
-            let required: Vec<String> = object.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(|key| key.as_str().map(String::from)).collect();
-            let properties = properties.into_iter().map(|(key, value)| {
-                let value = if required.contains(&key) { strict(value) } else { nullable(strict(value)) };
-                (key, value)
-            });
-            let keys: Vec<Value> = object["properties"].as_object().into_iter().flat_map(|p| p.keys()).map(|key| json!(key)).collect();
-            object.insert("properties".into(), Value::Object(properties.collect()));
-            object.insert("required".into(), Value::Array(keys));
-            object.insert("additionalProperties".into(), Value::Bool(false));
+    let Some(object) = schema.as_object_mut() else { return schema };
+    let mut required = object.remove("required");
+    if let Some(fields) = object.get_mut("properties").and_then(Value::as_object_mut) {
+        let keys: Vec<_> = fields.keys().map(|key| json!(key)).collect();
+        let was_required = required.as_ref().and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+        for ((_, field), key) in fields.iter_mut().zip(&keys) {
+            let value = strict(field.take());
+            *field = if was_required.contains(key) { value } else { nullable(value) };
         }
-        if let Some(items) = object.get("items").cloned() {
-            object.insert("items".into(), strict(items));
-        }
+        required = Some(Value::Array(keys));
+        object.insert("additionalProperties".into(), Value::Bool(false));
+    }
+    if let Some(required) = required {
+        object.insert("required".into(), required);
+    }
+    if let Some(items) = object.get_mut("items") {
+        *items = strict(items.take());
     }
     schema
 }
 
 /// Lets an optional property be `null`.
 fn nullable(mut schema: Value) -> Value {
-    match schema.get("type").cloned() {
-        Some(Value::String(kind)) => schema["type"] = json!([kind, "null"]),
-        Some(Value::Array(mut kinds)) if !kinds.contains(&json!("null")) => {
-            kinds.push(json!("null"));
-            schema["type"] = Value::Array(kinds);
-        }
+    let Some(kind) = schema.get_mut("type") else { return schema };
+    match kind {
+        Value::String(_) => *kind = json!([kind.take(), "null"]),
+        Value::Array(kinds) if !kinds.contains(&json!("null")) => kinds.push(json!("null")),
         _ => {}
     }
     schema
-}
-
-/// A schema written to a scratch file for `--output-schema`, removed again after.
-struct SchemaFile(std::path::PathBuf, String);
-
-impl SchemaFile {
-    fn write(schema: &Value) -> Result<SchemaFile> {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let name = format!("dutch-flashcards-schema-{}-{}.json", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
-        let path = std::env::temp_dir().join(name);
-        std::fs::write(&path, schema.to_string()).context("het schema kon niet worden weggeschreven")?;
-        let text = path.to_string_lossy().into_owned();
-        Ok(SchemaFile(path, text))
-    }
-
-    fn path(&self) -> &str {
-        &self.1
-    }
-}
-
-impl Drop for SchemaFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
 }
 
 #[cfg(test)]

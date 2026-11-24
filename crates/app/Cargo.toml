@@ -9,10 +9,13 @@ license.workspace = true
 [dependencies]
 dutch-flashcards-core = { path = "../core" }
 anyhow.workspace = true
+serde.workspace = true
 chrono.workspace = true
 libc = "0.2"
 gpui_kit = { package = "gpui_ce_kit", version = "0.3.0" }
+image = { version = "0.25", default-features = false, features = ["png"] }
 rodio = { version = "0.23.0", default-features = false, features = ["playback", "recording", "wav"] }
+rustix = { version = "1.1", features = ["stdio"] }
 
 [dev-dependencies]
 gpui_kit = { package = "gpui_ce_kit", version = "0.3.0", features = ["test-support"] }

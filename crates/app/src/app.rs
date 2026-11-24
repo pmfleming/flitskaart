@@ -3,15 +3,16 @@
 use std::time::Duration;
 
 use dutch_flashcards_core::Store;
-use dutch_flashcards_core::llm::{Cli, Llm, ModelChoice};
+use dutch_flashcards_core::llm::Llm;
 use dutch_flashcards_core::paths::Paths;
 use dutch_flashcards_core::speech::Listener;
 use dutch_flashcards_core::stats::Progress;
 use dutch_flashcards_core::store::{Appearance, Settings};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::theme::{Theme, ThemeMode};
-use gpui_kit::component::{ActiveTheme as _, Colorize as _, Icon, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Colorize as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     Context, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, ScrollHandle, SharedString,
     Styled as _, Subscription, Window, div, px,
@@ -21,6 +22,7 @@ use crate::add::AddState;
 use crate::audio::Sound;
 use crate::deck::DeckState;
 use crate::drafts::DraftRow;
+use crate::llm_settings::LlmSettings;
 use crate::mic_test::MicTest;
 use crate::study::StudyState;
 use crate::talk::TalkState;
@@ -82,15 +84,12 @@ pub struct FlashcardsApp {
     pub mic_test: MicTest,
     /// Instellingen scrolls; the microphone test brings its result into view.
     pub settings_scroll: ScrollHandle,
-    /// Instellingen shows Claude's use per day instead of per model.
-    pub usage_by_day: bool,
-    /// The models the logged-in tools offer; `None` until they have been asked.
-    pub llm_choices: Option<Vec<ModelChoice>>,
-    pub finding_models: bool,
-    /// The tool whose models Instellingen shows.
-    pub llm_tab: Option<Cli>,
+    pub llm_settings: LlmSettings,
     pub add: AddState,
     pub drafts: Vec<DraftRow>,
+    /// Cards being made in the background, shown on Concepten.
+    pub making: Option<crate::making::Making>,
+    pub making_failed: Option<crate::making::MakingFailed>,
     pub deck: DeckState,
     /// What Voortgang shows, worked out each time it opens.
     pub progress: Option<Progress>,
@@ -118,13 +117,12 @@ impl FlashcardsApp {
             talk: TalkState::new(window, cx),
             mic_test: MicTest::new(settings.input_boost, cx),
             settings_scroll: ScrollHandle::new(),
-            usage_by_day: false,
-            llm_choices: None,
-            finding_models: false,
-            llm_tab: None,
+            llm_settings: LlmSettings::default(),
             add: AddState::new(window, cx),
             deck: DeckState::new(window, cx),
             drafts: Vec::new(),
+            making: None,
+            making_failed: None,
             progress: None,
             settings,
             store,
@@ -134,8 +132,7 @@ impl FlashcardsApp {
             notice_ticket: 0,
             _appearance_changed: appearance_changed,
         };
-        let (cli, model, effort) = (app.settings.cli, app.settings.model.clone(), app.settings.effort);
-        app.llm.choose(cli, &model, effort);
+        app.llm.choose(app.settings.cli, &app.settings.model, app.settings.effort);
         app.apply_appearance(window, cx);
         app.reload_drafts(window, cx);
         app.reload_deck();
@@ -225,6 +222,23 @@ impl FlashcardsApp {
         .detach();
     }
 
+    pub fn in_background_with_window<T: Send + 'static>(
+        &self,
+        cx: &mut Context<Self>,
+        job: impl FnOnce() -> T + Send + 'static,
+        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        let task = cx.background_executor().spawn(async move { job() });
+        cx.spawn(async move |this, cx| {
+            let value = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                then(this, value, window, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Runs `then` after `delay`.
     pub fn after(&self, delay: Duration, cx: &mut Context<Self>, then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static) {
         let timer = cx.background_executor().timer(delay);
@@ -275,6 +289,10 @@ impl FlashcardsApp {
                     Tab::new().label(screen.label()).prefix(screen.icon().size_4().mr_1p5())
                 };
                 match screen {
+                    // Cards on their way: a spinner where they will arrive.
+                    Screen::Drafts if self.making.is_some() => {
+                        tab.suffix(div().ml_1p5().child(Spinner::new().small().color(theme.primary)))
+                    }
                     Screen::Drafts if drafts > 0 => {
                         let (bg, fg) = if on_study {
                             (theme.secondary, theme.muted_foreground)

@@ -159,7 +159,7 @@ mod tests {
     ]"#;
 
     #[test]
-    fn the_default_microphone_comes_first_with_its_kind_volume_and_mute() {
+    fn reads_microphone_properties_with_and_without_a_default() {
         let inputs = parse(DUMP).unwrap();
         let default = inputs.default_input().unwrap();
         assert_eq!(default.label, "WF-1000XM5");
@@ -174,10 +174,7 @@ mod tests {
         assert_eq!(others[0].kind, InputKind::BuiltIn);
         assert!(others[0].muted);
         assert_eq!(others[0].describe(), "laptop, volume 100%, gedempt");
-    }
 
-    #[test]
-    fn without_a_default_no_microphone_is_claimed_as_the_source() {
         let inputs = parse(&DUMP.replace("default.audio.source", "default.video.source")).unwrap();
         assert!(inputs.default_input().is_none());
         assert_eq!(inputs.0.len(), 2);

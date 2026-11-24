@@ -7,7 +7,7 @@
 use std::fmt::Display;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead as _, BufReader, Read, Write as _};
-use std::os::fd::{AsFd as _, AsRawFd as _};
+use std::os::fd::AsFd as _;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
@@ -85,12 +85,8 @@ fn write(level: &str, text: &str) {
 /// Points stderr at a pipe and logs every line that arrives on it.
 fn capture_stderr() -> io::Result<()> {
     let (reader, writer) = io::pipe()?;
-    // SAFETY: both descriptors are open for the whole call; dup2 only makes
-    // stderr another name for the pipe's writing end.
-    if unsafe { libc::dup2(writer.as_raw_fd(), libc::STDERR_FILENO) } == -1 {
-        return Err(io::Error::last_os_error());
-    }
     std::thread::Builder::new().name("stderr-log".into()).spawn(move || forward_lines(reader, |line| write("STDERR", line)))?;
+    rustix::stdio::dup2_stderr(writer)?;
     Ok(())
 }
 

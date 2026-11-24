@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use dutch_flashcards_core::inputs::{Input, InputKind, Inputs};
-use dutch_flashcards_core::speech::write_wav_16k;
 use dutch_flashcards_core::store::{INPUT_BOOSTS, boost_label, snap_input_boost};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
@@ -139,7 +138,7 @@ impl FlashcardsApp {
         crate::logging::info(format!("Microfoontest: {loudness:?}"));
         let path = self.mic_test_path();
         let saved = !captured.samples.is_empty()
-            && write_wav_16k(&path, &captured.samples, captured.rate, captured.channels).inspect_err(|err| self.mic_test.fail(err)).is_ok();
+            && captured.write_wav(&path).inspect_err(|err| self.mic_test.fail(err)).is_ok();
         self.mic_test.result = Some(MicResult { loudness, device: captured.device, saved, heard: None });
         self.show_mic_test_result();
         if saved && matches!(loudness, Loudness::Quiet | Loudness::Good | Loudness::Clipped) && self.listener.is_installed() {

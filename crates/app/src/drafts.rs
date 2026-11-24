@@ -140,6 +140,16 @@ impl FlashcardsApp {
     }
 
     pub fn render_drafts(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let making = self.render_making(cx);
+        if self.drafts.is_empty() && making.is_some() {
+            return v_flex()
+                .id("drafts-making")
+                .size_full()
+                .p_5()
+                .overflow_y_scroll()
+                .child(div().w_full().max_w(px(820.)).mx_auto().children(making))
+                .into_any_element();
+        }
         if self.drafts.is_empty() {
             return v_flex()
                 .size_full()
@@ -179,6 +189,7 @@ impl FlashcardsApp {
             .size_full()
             .p_5()
             .gap_4()
+            .children(making.map(|panel| div().w_full().max_w(px(820.)).mx_auto().child(panel)))
             .child(h_flex().w_full().max_w(px(820.)).mx_auto().justify_between().items_center().gap_3().child(title).child(accept_all))
             .child(
                 v_flex()

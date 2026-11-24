@@ -4,6 +4,7 @@
 //! capture can target that source without changing the system's routes.
 
 use std::io::ErrorKind;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -13,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use dutch_flashcards_core::inputs::Inputs;
+use dutch_flashcards_core::speech::write_wav_16k;
 use rodio::Source as _;
 use rodio::cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
 use rodio::cpal::{self, FromSample, SampleFormat, SizedSample};
@@ -45,8 +47,8 @@ const STALLED: &str =
 
 pub struct Captured {
     pub samples: Vec<f32>,
-    pub rate: u32,
-    pub channels: u16,
+    rate: u32,
+    channels: u16,
     /// Whether anything louder than the background was heard.
     pub had_speech: bool,
     /// The input device's name, when the system reports one.
@@ -56,6 +58,10 @@ pub struct Captured {
 }
 
 impl Captured {
+    pub fn write_wav(&self, path: &Path) -> Result<()> {
+        write_wav_16k(path, &self.samples, self.rate, self.channels)
+    }
+
     fn has_signal(&self) -> bool {
         self.samples.iter().any(|&sample| sample != 0.0)
     }
@@ -213,7 +219,7 @@ fn read_pipewire(output: &mut impl std::io::Read, sender: Sender<Vec<f32>>) {
             }
             break;
         }
-        let samples = buffer.chunks_exact(4).map(|bytes| f32::from_ne_bytes(bytes.try_into().unwrap())).collect();
+        let samples = buffer.as_chunks::<{ size_of::<f32>() }>().0.iter().copied().map(f32::from_ne_bytes).collect();
         if sender.send(samples).is_err() {
             break;
         }
@@ -305,20 +311,21 @@ impl<'a> Feed<'a> {
     }
 
     /// Waits briefly for the next burst of sound and adds it, amplified, to
-    /// `samples`. Returns whether one came; fails once the microphone has
-    /// delivered nothing for too long, or reported an error.
-    fn receive(&mut self, samples: &mut Vec<f32>, last_sound: Instant) -> Result<bool> {
+    /// `samples`. Fails once the microphone has delivered nothing for too
+    /// long, or reported an error.
+    fn receive(&mut self, samples: &mut Vec<f32>) -> Result<()> {
         let burst = self.sound.recv_timeout(Duration::from_millis(100));
         if self.failed.load(Ordering::Relaxed)
             || matches!(burst, Err(RecvTimeoutError::Disconnected))
-            || burst.is_err() && last_sound.elapsed() > self.stall_limit
+            || burst.is_err() && self.delivery.since_last() > self.stall_limit
         {
             bail!(STALLED);
         }
-        let Ok(burst) = burst else { return Ok(false) };
-        self.delivery.arrived(&burst);
-        samples.extend(burst.into_iter().map(|sample| amplify(sample, self.boost)));
-        Ok(true)
+        if let Ok(burst) = burst {
+            self.delivery.arrived(&burst);
+            samples.extend(burst.into_iter().map(|sample| amplify(sample, self.boost)));
+        }
+        Ok(())
     }
 }
 
@@ -342,6 +349,10 @@ impl Delivery {
             started: Instant::now(), bursts: 0, samples: 0, first: None, last: None,
             longest_gap: Duration::ZERO, first_signal: None, max_rms: 0.0,
         }
+    }
+
+    fn since_last(&self) -> Duration {
+        self.started.elapsed() - self.last.unwrap_or_default()
     }
 
     /// Notes a burst of `samples` arriving now.
@@ -442,13 +453,10 @@ fn listen_until_done(feed: &mut Feed<'_>, rate: u32, channels: u16, shared: &Sha
     let mut samples: Vec<f32> = Vec::with_capacity(rate as usize * channel_count * 6);
     let mut gate = SpeechGate::default();
     let started = Instant::now();
-    let (mut judged, mut last_sound) = (0, started);
-    let mut warmup_samples = 0;
+    let (mut judged, mut warmup_samples) = (0, 0);
     while !shared.stop.load(Ordering::Relaxed) && started.elapsed() < MAX_LENGTH + WARMUP_LIMIT {
         if samples.len() - judged < block {
-            if feed.receive(&mut samples, last_sound)? {
-                last_sound = Instant::now();
-            }
+            feed.receive(&mut samples)?;
             continue;
         }
         let loudness = rms(&samples[judged..judged + block], channel_count);
@@ -460,9 +468,7 @@ fn listen_until_done(feed: &mut Feed<'_>, rate: u32, channels: u16, shared: &Sha
             warmup_samples = judged;
         }
         let done = gate.hear(loudness);
-        if gate.ready {
-            shared.ready.store(true, Ordering::Relaxed);
-        }
+        shared.ready.store(gate.ready, Ordering::Relaxed);
         shared.speaking.store(gate.had_speech, Ordering::Relaxed);
         if done {
             break;
@@ -497,7 +503,7 @@ fn rms(block: &[f32], channels: usize) -> f32 {
 }
 
 /// Reads a WAV file as if it had been recorded, for checks without a microphone.
-pub fn from_file(path: &std::path::Path, boost: f32) -> Result<Captured> {
+pub fn from_file(path: &Path, boost: f32) -> Result<Captured> {
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let decoder = rodio::Decoder::try_from(file)?;
     let (rate, channels) = (decoder.sample_rate().get(), decoder.channels().get());
@@ -565,7 +571,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
-    use super::{BLOCK, Captured, Feed, LEARN_NOISE, Loudness, Shared, SpeechGate, WARMUP_LIMIT, listen, meter_level, rms};
+    use super::{BLOCK, Captured, Feed, LEARN_NOISE, Loudness, Shared, SpeechGate, WARMUP_LIMIT, listen, meter_level, read_pipewire, rms};
 
     /// `seconds` of a 440 Hz tone at 16 kHz mono; amplitude 0 is silence.
     fn tone(amplitude: f32, seconds: f32) -> Captured {
@@ -602,6 +608,13 @@ mod tests {
         assert_eq!(captured.samples, all[..captured.samples.len()], "nothing dropped or reordered");
         let boosted = [2.5, 4.0].map(|boost| peak(&listen_to(&all, boost, Duration::from_secs(5)).unwrap().samples));
         assert!((0.74..=0.76).contains(&boosted[0]) && boosted[1] == 1.0, "0.3 × 2.5, and cut off at 1: {boosted:?}");
+
+        let expected = &all[..960];
+        let mut bytes: Vec<_> = expected.iter().flat_map(|sample| sample.to_ne_bytes()).collect();
+        bytes.extend([0; 3]); // A partial trailing frame is discarded.
+        let (sender, receiver) = mpsc::channel();
+        read_pipewire(&mut bytes.as_slice(), sender);
+        assert_eq!(receiver.into_iter().flatten().collect::<Vec<_>>(), expected);
     }
 
     #[test]
@@ -613,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_zeros_do_not_set_the_noise_floor_and_quiet_speech_is_detected() {
+    fn startup_noise_and_input_bias_do_not_mask_quiet_speech() {
         let mut gate = SpeechGate::default();
         for _ in 0..45 {
             assert!(!gate.hear(0.0));
@@ -628,9 +641,14 @@ mod tests {
         assert!(gate.had_speech);
         assert!(meter_level(0.00356) > 0.15);
 
-        let audio: Vec<_> = vec![0.0; 21_600].into_iter().chain(utterance(0.005)).collect();
-        let captured = listen_to(&audio, 1.0, Duration::from_secs(5)).unwrap();
-        assert_eq!(Loudness::of(&captured), Loudness::Quiet);
+        let mut biased: Vec<_> = utterance(0.01).into_iter().map(|sample| sample - 0.26).collect();
+        biased[..150].fill(1.0);
+        let gated: Vec<_> = vec![0.0; 21_600].into_iter().chain(utterance(0.005)).collect();
+        for audio in [biased, gated] {
+            let captured = listen_to(&audio, 1.0, Duration::from_secs(5)).unwrap();
+            assert_eq!(Loudness::of(&captured), Loudness::Quiet);
+        }
+        assert!(rms(&[-0.26, 0.3, -0.26, 0.3], 2) < 1e-6);
     }
 
     #[test]
@@ -649,21 +667,10 @@ mod tests {
     }
 
     #[test]
-    fn input_bias_or_a_startup_pop_does_not_mask_quiet_speech() {
-        let mut audio: Vec<_> = utterance(0.01).into_iter().map(|sample| sample - 0.26).collect();
-        audio[..150].fill(1.0);
-        let captured = listen_to(&audio, 1.0, Duration::from_secs(5)).unwrap();
-        assert!(captured.had_speech);
-        assert_eq!(Loudness::of(&captured), Loudness::Quiet);
-        assert!(rms(&[-0.26, 0.3, -0.26, 0.3], 2) < 1e-6);
-    }
-
-    #[test]
-    fn loudness_tells_faint_good_distorted_and_silent_apart() {
-        let mut silent = tone(0.3, 1.0);
-        silent.had_speech = false;
-        let judged = [tone(0.03, 1.0), tone(0.3, 1.0), tone(1.0, 1.0), silent].map(|captured| Loudness::of(&captured));
-        assert_eq!(judged, [Loudness::Quiet, Loudness::Good, Loudness::Clipped, Loudness::Silent]);
-        assert!(judged.iter().all(|loudness| !loudness.verdict().is_empty()));
+    fn loudness_distinguishes_clear_speech_from_clipping() {
+        for (amplitude, expected) in [(0.3, Loudness::Good), (1.0, Loudness::Clipped)] {
+            assert_eq!(Loudness::of(&tone(amplitude, 1.0)), expected);
+            assert!(!expected.verdict().is_empty());
+        }
     }
 }

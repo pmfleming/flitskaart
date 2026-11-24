@@ -5,11 +5,13 @@
 pub mod llm;
 pub mod conversation;
 pub mod drafting;
+pub mod drafting_time;
 pub mod inputs;
 pub mod model;
 pub mod paths;
 pub mod schedule;
 pub mod speech;
+pub mod spelling;
 pub mod stats;
 pub mod store;
 pub mod usage;

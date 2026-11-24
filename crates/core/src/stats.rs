@@ -5,12 +5,14 @@
 //! cards uses. A day counts as practised when a card was scored or a
 //! conversation had a line from the learner; skipping a card saves nothing.
 
+use std::collections::{BTreeSet, HashMap, HashSet};
+
 use anyhow::Result;
 use chrono::{DateTime, Datelike as _, Duration, Local, NaiveDate, Utc};
 use turso::Value;
 
 use crate::model::{Card, CardId, Grade, Status};
-use crate::store::{Mode, Store, integer, parse_stamp, stamp, start_of_local_day, text};
+use crate::store::{Mode, Store, integer, parse_stamp, real, stamp, start_of_local_day, text};
 
 /// How many days the activity chart and the skills look back.
 pub const WINDOW_DAYS: i64 = 30;
@@ -20,12 +22,12 @@ pub const SHAKY_BELOW_DAYS: f64 = 7.0;
 /// From this stability on a card is Sterk; in between it is Groeit.
 pub const STRONG_FROM_DAYS: f64 = 30.0;
 /// Onthouden is shown once there are this many reviews to judge it by.
-pub const RECALL_MIN_REVIEWS: usize = 10;
+const RECALL_MIN_REVIEWS: usize = 10;
 /// The longest time one card's review counts for; beyond it the learner was
 /// most likely doing something else.
-pub const MAX_REVIEW_SECONDS: f64 = 120.0;
+pub(crate) const MAX_REVIEW_SECONDS: f64 = 120.0;
 /// The longest time one answer in Gesprek counts for.
-pub const MAX_ANSWER_SECONDS: f64 = 180.0;
+const MAX_ANSWER_SECONDS: f64 = 180.0;
 
 /// Days in a row with practice.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -131,29 +133,29 @@ pub struct Progress {
 
 /// A saved review, as Voortgang reads it.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ReviewRow {
-    pub card: CardId,
-    pub at: DateTime<Utc>,
+struct ReviewRow {
+    card: CardId,
+    at: DateTime<Utc>,
     /// The learner's own score.
-    pub own: Grade,
-    pub mode: Mode,
-    pub speech: Option<f32>,
-    pub written: Option<f32>,
-    pub seconds: f64,
+    own: Grade,
+    mode: Mode,
+    speech: Option<f32>,
+    written: Option<f32>,
+    seconds: f64,
 }
 
 /// A conversation in Gesprek, saved once the learner has said something.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Talk {
     /// `None` until it is first saved.
-    pub id: Option<i64>,
-    pub topic: String,
-    pub started_at: DateTime<Utc>,
+    id: Option<i64>,
+    topic: String,
+    started_at: DateTime<Utc>,
     /// The learner's lines that were answered.
-    pub lines: u32,
-    pub spoken: u32,
+    lines: u32,
+    spoken: u32,
     /// Time spent answering, each answer up to [`MAX_ANSWER_SECONDS`].
-    pub seconds: f64,
+    seconds: f64,
 }
 
 impl Talk {
@@ -169,52 +171,77 @@ impl Talk {
     }
 }
 
-fn day_of(at: DateTime<Utc>) -> NaiveDate {
+pub(crate) fn day_of(at: DateTime<Utc>) -> NaiveDate {
     at.with_timezone(&Local).date_naive()
 }
 
 /// The streak on `today`, given every practised day in any order.
-pub fn streak(days: &[NaiveDate], today: NaiveDate) -> Streak {
-    let mut days: Vec<NaiveDate> = days.iter().copied().filter(|day| *day <= today).collect();
-    days.sort_unstable();
-    days.dedup();
+fn streak(days: &BTreeSet<NaiveDate>, today: NaiveDate) -> Streak {
     let mut longest = 0;
     let mut run = 0;
     let mut previous: Option<NaiveDate> = None;
-    for day in &days {
+    for day in days.range(..=today) {
         run = if previous.is_some_and(|p| *day - p == Duration::days(1)) { run + 1 } else { 1 };
         longest = longest.max(run);
         previous = Some(*day);
     }
-    let practised_today = days.last() == Some(&today);
-    let alive = practised_today || days.last() == Some(&(today - Duration::days(1)));
-    Streak { days: if alive { run } else { 0 }, longest, today: practised_today }
+    let alive = previous.is_some_and(|day| today - day <= Duration::days(1));
+    Streak { days: if alive { run } else { 0 }, longest, today: days.contains(&today) }
 }
 
 /// Adds up the reviews (in the order they were saved), the deck's cards and
 /// the conversations. `waiting` is what Oefenen still has for today.
-pub fn summarize(reviews: &[ReviewRow], cards: &[Card], talks: &[Talk], waiting: usize, now: DateTime<Utc>) -> Progress {
+fn summarize(reviews: &[ReviewRow], cards: &[Card], talks: &[Talk], waiting: usize, now: DateTime<Utc>) -> Progress {
     let today = day_of(now);
     let since = now - Duration::days(WINDOW_DAYS);
     let before = since - Duration::days(WINDOW_DAYS);
-    let talks: Vec<&Talk> = talks.iter().filter(|talk| talk.lines > 0).collect();
+    let talks = talks.iter().filter(|talk| talk.lines > 0);
+    let practised: BTreeSet<_> = reviews.iter().map(|r| day_of(r.at)).chain(talks.clone().map(|t| day_of(t.started_at))).collect();
+    let week = days_ending(today, 7).map(|day| (day, practised.contains(&day))).collect();
+    let (activity, recall) = review_history(reviews, today, since);
+    let strength = deck_strength(cards);
 
-    let practised: Vec<NaiveDate> =
-        reviews.iter().map(|r| day_of(r.at)).chain(talks.iter().map(|t| day_of(t.started_at))).collect();
-    let week = (0..7).rev().map(|back| today - Duration::days(back)).map(|day| (day, practised.contains(&day))).collect();
+    let (recent, earlier) = reviews.iter().filter(|r| r.at >= before).partition::<Vec<_>, _>(|r| r.at >= since);
+    let skill = |measure: fn(&ReviewRow) -> Option<f32>| compare_skill(&recent, &earlier, measure);
+    let (talking, talk_seconds) = talk_activity(talks.filter(|t| t.started_at >= since));
 
-    // The first review of each card, and the time since its previous one.
-    let mut last_seen: std::collections::HashMap<CardId, DateTime<Utc>> = std::collections::HashMap::new();
-    let mut activity: Vec<Day> =
-        (0..WINDOW_DAYS).rev().map(|back| Day { date: today - Duration::days(back), new: 0, again: 0 }).collect();
+    Progress {
+        started: !practised.is_empty(),
+        streak: streak(&practised, today),
+        week,
+        today: today_queue(reviews, cards, waiting, now),
+        learned: strength.shaky + strength.growing + strength.strong,
+        strength,
+        recall,
+        reviews: recent.len(),
+        seconds: recent.iter().map(|r| r.seconds).sum::<f64>() + talk_seconds,
+        activity,
+        speaking: skill(|r| r.speech),
+        writing: skill(|r| r.written),
+        listening: skill(|r| (r.mode == Mode::Listen).then_some(u8::from(r.own != Grade::DontKnow) as f32)),
+        tested: skill(|r| Some(u8::from(r.speech.is_some() || r.written.is_some()) as f32)),
+        talking,
+    }
+}
+
+pub(crate) fn days_ending(today: NaiveDate, count: i64) -> impl Iterator<Item = NaiveDate> {
+    (0..count).rev().map(move |back| today - Duration::days(back))
+}
+
+fn review_history(reviews: &[ReviewRow], today: NaiveDate, since: DateTime<Utc>) -> (Vec<Day>, Option<f32>) {
+    let mut activity: Vec<_> = days_ending(today, WINDOW_DAYS).map(|date| Day { date, new: 0, again: 0 }).collect();
+    let first_day = today - Duration::days(WINDOW_DAYS - 1);
+    let mut last_seen = HashMap::new();
     let (mut recalled, mut judged) = (0, 0);
     for review in reviews {
         let previous = last_seen.insert(review.card, review.at);
         if review.at < since {
             continue;
         }
-        if let Some(day) = activity.iter_mut().find(|d| d.date == day_of(review.at)) {
-            if previous.is_none() { day.new += 1 } else { day.again += 1 }
+        let index = (day_of(review.at) - first_day).num_days() as usize;
+        if let Some(day) = activity.get_mut(index) {
+            day.new += usize::from(previous.is_none());
+            day.again += usize::from(previous.is_some());
         }
         // Learning steps minutes apart say nothing about remembering.
         if previous.is_some_and(|p| review.at - p >= Duration::days(1)) {
@@ -222,60 +249,53 @@ pub fn summarize(reviews: &[ReviewRow], cards: &[Card], talks: &[Talk], waiting:
             recalled += usize::from(review.own != Grade::DontKnow);
         }
     }
+    (activity, (judged >= RECALL_MIN_REVIEWS).then(|| recalled as f32 / judged as f32))
+}
 
-    let reviewed_today: Vec<CardId> = reviews.iter().filter(|r| day_of(r.at) == today).map(|r| r.card).collect();
-    let done = cards
-        .iter()
-        .filter(|card| card.status == Status::Active && reviewed_today.contains(&card.id) && card.due.is_some_and(|due| due > now))
-        .count();
+fn today_queue(reviews: &[ReviewRow], cards: &[Card], waiting: usize, now: DateTime<Utc>) -> Today {
+    let today = day_of(now);
+    let (mut ids, mut count) = (HashSet::new(), 0);
+    for review in reviews.iter().filter(|r| day_of(r.at) == today) {
+        ids.insert(review.card);
+        count += 1;
+    }
+    let done = cards.iter().filter(|c| c.status == Status::Active && ids.contains(&c.id) && c.due.is_some_and(|due| due > now)).count();
+    Today { done, waiting, reviews: count }
+}
 
+fn deck_strength(cards: &[Card]) -> Strength {
     let mut strength = Strength::default();
     for card in cards {
-        let place = match card.status {
+        *match card.status {
             Status::Draft => continue,
             Status::Suspended => &mut strength.paused,
             Status::Active if card.is_new() => &mut strength.new,
             Status::Active if card.schedule.stability < SHAKY_BELOW_DAYS => &mut strength.shaky,
             Status::Active if card.schedule.stability < STRONG_FROM_DAYS => &mut strength.growing,
             Status::Active => &mut strength.strong,
-        };
-        *place += 1;
+        } += 1;
     }
+    strength
+}
 
-    let recent: Vec<&ReviewRow> = reviews.iter().filter(|r| r.at >= since).collect();
-    let earlier: Vec<&ReviewRow> = reviews.iter().filter(|r| r.at >= before && r.at < since).collect();
-    let skill = |measure: fn(&ReviewRow) -> Option<f32>| {
-        let average = |rows: &[&ReviewRow]| {
-            let values: Vec<f32> = rows.iter().filter_map(|r| measure(r)).collect();
-            (!values.is_empty()).then(|| (values.iter().sum::<f32>() / values.len() as f32, values.len()))
-        };
-        let (score, count) = average(&recent)?;
-        Some(Skill { score, count, change: average(&earlier).map(|(old, _)| (score - old) * 100.0) })
+fn compare_skill(recent: &[&ReviewRow], earlier: &[&ReviewRow], measure: fn(&ReviewRow) -> Option<f32>) -> Option<Skill> {
+    let average = |rows: &[&ReviewRow]| {
+        let (sum, count) = rows.iter().filter_map(|r| measure(r)).fold((0.0, 0), |(sum, count), value| (sum + value, count + 1));
+        (count > 0).then(|| (sum / count as f32, count))
     };
-    let recent_talks: Vec<&&Talk> = talks.iter().filter(|t| t.started_at >= since).collect();
-    let lines: u32 = recent_talks.iter().map(|t| t.lines).sum();
+    let (score, count) = average(recent)?;
+    Some(Skill { score, count, change: average(earlier).map(|(old, _)| (score - old) * 100.0) })
+}
 
-    Progress {
-        started: !practised.is_empty(),
-        streak: streak(&practised, today),
-        week,
-        today: Today { done, waiting, reviews: reviewed_today.len() },
-        learned: cards.iter().filter(|c| c.status == Status::Active && !c.is_new()).count(),
-        strength,
-        recall: (judged >= RECALL_MIN_REVIEWS).then(|| recalled as f32 / judged as f32),
-        reviews: recent.len(),
-        seconds: recent.iter().map(|r| r.seconds).sum::<f64>() + recent_talks.iter().map(|t| t.seconds).sum::<f64>(),
-        activity,
-        speaking: skill(|r| r.speech),
-        writing: skill(|r| r.written),
-        listening: skill(|r| (r.mode == Mode::Listen).then_some(if r.own == Grade::DontKnow { 0.0 } else { 1.0 })),
-        tested: skill(|r| Some(if r.speech.is_some() || r.written.is_some() { 1.0 } else { 0.0 })),
-        talking: (!recent_talks.is_empty()).then(|| Talking {
-            talks: recent_talks.len(),
-            lines: lines as usize,
-            spoken: recent_talks.iter().map(|t| t.spoken).sum::<u32>() as f32 / lines.max(1) as f32,
-        }),
+fn talk_activity<'a>(talks: impl Iterator<Item = &'a Talk>) -> (Option<Talking>, f64) {
+    let (mut count, mut lines, mut spoken, mut seconds) = (0, 0, 0, 0.0);
+    for talk in talks {
+        count += 1;
+        lines += talk.lines as usize;
+        spoken += talk.spoken as usize;
+        seconds += talk.seconds;
     }
+    ((count > 0).then(|| Talking { talks: count, lines, spoken: spoken as f32 / lines as f32 }), seconds)
 }
 
 /// "ma", "di", … for a day's place in the week.
@@ -293,9 +313,8 @@ impl Store {
 
     /// The streak alone, for Oefenen.
     pub fn streak(&self, now: DateTime<Utc>) -> Result<Streak> {
-        let reviews = self.rows("SELECT reviewed_at FROM reviews", vec![])?;
-        let talks = self.rows("SELECT started_at FROM talks WHERE lines > 0", vec![])?;
-        let days: Vec<NaiveDate> = reviews.iter().chain(&talks).filter_map(|row| parse_stamp(&row[0])).map(day_of).collect();
+        let rows = self.rows("SELECT reviewed_at FROM reviews UNION ALL SELECT started_at FROM talks WHERE lines > 0", vec![])?;
+        let days = rows.iter().filter_map(|row| parse_stamp(&row[0])).map(day_of).collect();
         Ok(streak(&days, day_of(now)))
     }
 
@@ -333,11 +352,6 @@ impl Store {
              FROM reviews ORDER BY reviewed_at, id",
             vec![],
         )?;
-        let real = |value: &Value| match value {
-            Value::Real(n) => Some(*n),
-            Value::Integer(n) => Some(*n as f64),
-            _ => None,
-        };
         Ok(rows
             .iter()
             .filter_map(|row| {
@@ -365,11 +379,7 @@ impl Store {
                     started_at: parse_stamp(&row[2])?,
                     lines: u32::try_from(integer(&row[3])).ok()?,
                     spoken: u32::try_from(integer(&row[4])).ok()?,
-                    seconds: match row[5] {
-                        Value::Real(n) => n,
-                        Value::Integer(n) => n as f64,
-                        _ => 0.0,
-                    },
+                    seconds: real(&row[5]).unwrap_or(0.0),
                 })
             })
             .collect())
@@ -378,7 +388,7 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, Duration, Local, NaiveDate, NaiveTime, TimeZone as _, Utc};
+    use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 
     use super::{Card, Grade, Mode, ReviewRow, STRONG_FROM_DAYS, Status, Streak, Talk, streak, summarize, weekday_short};
     use crate::schedule::new_schedule;
@@ -407,27 +417,22 @@ mod tests {
         }
     }
 
-    fn date(y: i32, m: u32, d: u32) -> NaiveDate {
-        NaiveDate::from_ymd_opt(y, m, d).unwrap()
-    }
-
     /// A moment on a local day, as the learner's clock shows it.
     fn local(day: NaiveDate, hour: u32, minute: u32) -> DateTime<Utc> {
-        let time = NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
-        Local.from_local_datetime(&day.and_time(time)).earliest().unwrap().with_timezone(&Utc)
+        day.and_hms_opt(hour, minute, 0).unwrap().and_local_timezone(Local).earliest().unwrap().to_utc()
     }
 
     #[test]
     fn a_streak_counts_days_in_a_row_and_survives_until_midnight() {
-        let today = date(2026, 11, 24);
+        let today = NaiveDate::from_ymd_opt(2026, 11, 24).unwrap();
         let back = |n: i64| today - Duration::days(n);
         // Four days, a missed day, then two days ending yesterday.
-        let days = [back(8), back(7), back(6), back(5), back(2), back(1), back(1)];
-        assert_eq!(streak(&days, today), Streak { days: 2, longest: 4, today: false }, "still alive before today's first card");
-        let days: Vec<_> = days.iter().copied().chain([today]).collect();
+        let mut days = [back(8), back(7), back(6), back(5), back(2), back(1), back(1), today + Duration::days(1)].into();
+        assert_eq!(streak(&days, today), Streak { days: 2, longest: 4, today: false });
+        days.insert(today);
         assert_eq!(streak(&days, today), Streak { days: 3, longest: 4, today: true });
-        assert_eq!(streak(&[back(2)], today), Streak { days: 0, longest: 1, today: false }, "a missed day ends it");
-        assert_eq!(streak(&[], today), Streak::default());
+        assert_eq!(streak(&[back(2)].into(), today), Streak { days: 0, longest: 1, today: false }, "a missed day ends it");
+        assert_eq!(streak(&Default::default(), today), Streak::default());
         assert_eq!(weekday_short(today), "di");
     }
 
@@ -527,22 +532,22 @@ mod tests {
         let now = Utc::now();
         let empty = store.progress(now, 10).unwrap();
         assert!(!empty.started && empty.streak == Streak::default() && empty.activity.len() == 30 && empty.week.len() == 7);
-        let cards = [NewCard { dutch: "een".into(), ..NewCard::default() }, NewCard { dutch: "twee".into(), ..NewCard::default() }];
+        let cards = ["een", "twee"].map(|dutch| NewCard { dutch: dutch.into(), ..NewCard::default() });
         let ids = store.add_drafts(None, &cards, now).unwrap();
         ids.iter().for_each(|id| store.accept(*id, now).unwrap());
         let review = Review { own: Grade::Easy, speech: None, written: None, mode: Mode::Read, peeked: false, seconds: Some(500.0) };
         store.record_review(ids[0], review, &Scheduler::default(), now).unwrap();
         let mut talk = Talk::new("Op het werk", now);
-        talk.add_line(true, 30.0);
-        store.save_talk(&mut talk).unwrap();
-        talk.add_line(true, 30.0);
-        store.save_talk(&mut talk).unwrap();
+        for _ in 0..2 {
+            talk.add_line(true, 30.0);
+            store.save_talk(&mut talk).unwrap();
+        }
 
         let progress = store.progress(now, 10).unwrap();
         assert_eq!((progress.today.done, progress.today.waiting, progress.today.reviews), (1, 1, 1));
         assert_eq!((progress.streak.days, progress.learned, progress.seconds), (1, 1, 120.0 + 60.0), "a review counts for 2 minutes at most");
         assert_eq!(progress.talking.map(|t| (t.talks, t.lines)), Some((1, 2)), "saved twice, one conversation");
-        assert_eq!((store.reviewed_today(now).unwrap(), store.streak(now).unwrap().days), (1, 1));
+        assert_eq!(store.streak(now).unwrap(), progress.streak);
         // Deleting the card keeps the day it was practised.
         store.delete(ids[0]).unwrap();
         let progress = store.progress(now, 10).unwrap();

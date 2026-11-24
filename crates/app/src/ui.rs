@@ -8,7 +8,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::component::{ActiveTheme as _, Colorize as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     App, Div, ElementId, FontWeight, Hsla, InteractiveElement as _, ParentElement as _, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, div, hsla, px,
+    StatefulInteractiveElement as _, Styled as _, div, hsla, px, relative,
 };
 
 fn hex(color: u32) -> Hsla {
@@ -38,115 +38,60 @@ pub fn apply_palette(cx: &mut App) {
     Theme::update(cx, |theme| {
         let dark = theme.is_dark();
         let c = &mut theme.colors;
-        if dark {
-            c.background = hex(0x0f1420);
-            c.tab_bar = hex(0x151b2b);
-            c.group_box = hex(0x171f30);
-            c.popover = hex(0x171f30);
-            c.secondary = hex(0x1f283d);
-            c.secondary_hover = hex(0x28344f);
-            c.secondary_active = hex(0x313f5e);
-            c.secondary_foreground = hex(0xd7e0f2);
-            c.muted = hex(0x1b2336);
-            c.muted_foreground = hex(0x97a5c2);
-            c.foreground = hex(0xe9edf7);
-            c.border = hex(0x2a354d);
-            c.input = hex(0x32405c);
-            c.primary = hex(0x7ba0f4);
-            c.primary_hover = hex(0x8fb0f7);
-            c.primary_active = hex(0x6790f0);
-            c.primary_foreground = hex(0x0d1320);
-            c.button = hex(0x1f283d);
-            c.button_hover = hex(0x28344f);
-            c.button_active = hex(0x313f5e);
-            c.button_foreground = hex(0xe9edf7);
-            c.button_primary = c.primary;
-            c.button_primary_hover = c.primary_hover;
-            c.button_primary_active = c.primary_active;
-            c.button_primary_foreground = c.primary_foreground;
-            c.button_secondary = c.secondary;
-            c.button_secondary_hover = c.secondary_hover;
-            c.button_secondary_active = c.secondary_active;
-            c.button_secondary_foreground = c.secondary_foreground;
-            c.accent = hex(0x1d2b4d);
-            c.accent_foreground = hex(0xc5d7fb);
-            c.ring = hex(0x7ba0f4);
-            c.slider_bar = hex(0x7ba0f4);
-            c.slider_thumb = hex(0xe9edf7);
-            c.tab_foreground = hex(0x97a5c2);
-            c.tab_active_foreground = hex(0xe9edf7);
-            c.danger = hex(0xef7d75);
-            c.danger_hover = hex(0xf3918a);
-            c.danger_active = hex(0xe46860);
-            c.danger_foreground = hex(0x190909);
-            c.button_danger = c.danger;
-            c.button_danger_hover = c.danger_hover;
-            c.button_danger_active = c.danger_active;
-            c.button_danger_foreground = c.danger_foreground;
-            c.warning = hex(0xe4b24e);
-            c.warning_hover = hex(0xebbf68);
-            c.warning_active = hex(0xd5a13b);
-            c.warning_foreground = hex(0x1b1305);
-            c.blue = hex(0x7ba0f4);
-            c.success = hex(0x62c994);
-            c.success_hover = hex(0x77d4a4);
-            c.success_active = hex(0x4db981);
-            c.success_foreground = hex(0x071a10);
-        } else {
-            c.background = hex(0xf4f6fb);
-            c.tab_bar = hex(0xffffff);
-            c.group_box = hex(0xffffff);
-            c.popover = hex(0xffffff);
-            c.secondary = hex(0xe9eef7);
-            c.secondary_hover = hex(0xdde5f2);
-            c.secondary_active = hex(0xd0dbed);
-            c.secondary_foreground = hex(0x1e2a42);
-            c.muted = hex(0xeef2f8);
-            c.muted_foreground = hex(0x55617a);
-            c.foreground = hex(0x121a2c);
-            c.border = hex(0xd4dce9);
-            c.input = hex(0xc8d3e3);
-            c.primary = hex(0x1d3f9e);
-            c.primary_hover = hex(0x183587);
-            c.primary_active = hex(0x142c72);
-            c.primary_foreground = hex(0xffffff);
-            c.button = hex(0xffffff);
-            c.button_hover = hex(0xf1f4fa);
-            c.button_active = hex(0xe5ebf5);
-            c.button_foreground = hex(0x121a2c);
-            c.button_primary = c.primary;
-            c.button_primary_hover = c.primary_hover;
-            c.button_primary_active = c.primary_active;
-            c.button_primary_foreground = c.primary_foreground;
-            c.button_secondary = c.secondary;
-            c.button_secondary_hover = c.secondary_hover;
-            c.button_secondary_active = c.secondary_active;
-            c.button_secondary_foreground = c.secondary_foreground;
-            c.accent = hex(0xe2e9fa);
-            c.accent_foreground = hex(0x16327e);
-            c.ring = hex(0x1d3f9e);
-            c.slider_bar = hex(0x1d3f9e);
-            c.slider_thumb = hex(0xffffff);
-            c.tab_foreground = hex(0x55617a);
-            c.tab_active_foreground = hex(0x121a2c);
-            c.danger = hex(0xb8322c);
-            c.danger_hover = hex(0xa12924);
-            c.danger_active = hex(0x8c221d);
-            c.danger_foreground = hex(0xffffff);
-            c.button_danger = c.danger;
-            c.button_danger_hover = c.danger_hover;
-            c.button_danger_active = c.danger_active;
-            c.button_danger_foreground = c.danger_foreground;
-            c.warning = hex(0xa6630c);
-            c.warning_hover = hex(0x915609);
-            c.warning_active = hex(0x7c4908);
-            c.warning_foreground = hex(0xffffff);
-            c.blue = hex(0x1d3f9e);
-            c.success = hex(0x1f7a4d);
-            c.success_hover = hex(0x196740);
-            c.success_active = hex(0x145534);
-            c.success_foreground = hex(0xffffff);
-        }
+        let shade = |light, night| hex(if dark { night } else { light });
+        c.background = shade(0xf4f6fb, 0x0f1420);
+        c.tab_bar = shade(0xffffff, 0x151b2b);
+        c.group_box = shade(0xffffff, 0x171f30);
+        c.popover = c.group_box;
+        c.secondary = shade(0xe9eef7, 0x1f283d);
+        c.secondary_hover = shade(0xdde5f2, 0x28344f);
+        c.secondary_active = shade(0xd0dbed, 0x313f5e);
+        c.secondary_foreground = shade(0x1e2a42, 0xd7e0f2);
+        c.muted = shade(0xeef2f8, 0x1b2336);
+        c.muted_foreground = shade(0x55617a, 0x97a5c2);
+        c.foreground = shade(0x121a2c, 0xe9edf7);
+        c.border = shade(0xd4dce9, 0x2a354d);
+        c.input = shade(0xc8d3e3, 0x32405c);
+        c.primary = shade(0x1d3f9e, 0x7ba0f4);
+        c.primary_hover = shade(0x183587, 0x8fb0f7);
+        c.primary_active = shade(0x142c72, 0x6790f0);
+        c.primary_foreground = shade(0xffffff, 0x0d1320);
+        c.button = shade(0xffffff, 0x1f283d);
+        c.button_hover = shade(0xf1f4fa, 0x28344f);
+        c.button_active = shade(0xe5ebf5, 0x313f5e);
+        c.button_foreground = c.foreground;
+        c.button_primary = c.primary;
+        c.button_primary_hover = c.primary_hover;
+        c.button_primary_active = c.primary_active;
+        c.button_primary_foreground = c.primary_foreground;
+        c.button_secondary = c.secondary;
+        c.button_secondary_hover = c.secondary_hover;
+        c.button_secondary_active = c.secondary_active;
+        c.button_secondary_foreground = c.secondary_foreground;
+        c.accent = shade(0xe2e9fa, 0x1d2b4d);
+        c.accent_foreground = shade(0x16327e, 0xc5d7fb);
+        c.ring = c.primary;
+        c.slider_bar = c.primary;
+        c.slider_thumb = shade(0xffffff, 0xe9edf7);
+        c.tab_foreground = c.muted_foreground;
+        c.tab_active_foreground = c.foreground;
+        c.danger = shade(0xb8322c, 0xef7d75);
+        c.danger_hover = shade(0xa12924, 0xf3918a);
+        c.danger_active = shade(0x8c221d, 0xe46860);
+        c.danger_foreground = shade(0xffffff, 0x190909);
+        c.button_danger = c.danger;
+        c.button_danger_hover = c.danger_hover;
+        c.button_danger_active = c.danger_active;
+        c.button_danger_foreground = c.danger_foreground;
+        c.warning = shade(0xa6630c, 0xe4b24e);
+        c.warning_hover = shade(0x915609, 0xebbf68);
+        c.warning_active = shade(0x7c4908, 0xd5a13b);
+        c.warning_foreground = shade(0xffffff, 0x1b1305);
+        c.blue = c.primary;
+        c.success = shade(0x1f7a4d, 0x62c994);
+        c.success_hover = shade(0x196740, 0x77d4a4);
+        c.success_active = shade(0x145534, 0x4db981);
+        c.success_foreground = shade(0xffffff, 0x071a10);
         theme.radius = px(7.);
         theme.radius_lg = px(12.);
     });
@@ -341,6 +286,14 @@ pub fn day_label(day: NaiveDate) -> String {
 /// A small square of colour, for a legend.
 pub fn dot(color: Hsla) -> Div {
     div().flex_none().size(px(8.)).rounded(px(2.)).bg(color)
+}
+
+/// A horizontal bar with proportional segments, omitting zero-width parts.
+pub fn distribution_bar(height: f32, total: u64, parts: impl IntoIterator<Item = (u64, Hsla)>, cx: &App) -> Div {
+    let total = total.max(1) as f32;
+    h_flex().h(px(height)).w_full().rounded_full().overflow_hidden().bg(cx.theme().secondary).children(
+        parts.into_iter().filter(|(count, _)| *count > 0).map(|(count, color)| div().h_full().w(relative(count as f32 / total)).bg(color)),
+    )
 }
 
 /// A bar per day, each split into parts stacked from the bottom in the order

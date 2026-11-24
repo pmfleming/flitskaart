@@ -13,7 +13,7 @@ use gpui_kit::{
 
 use crate::app::FlashcardsApp;
 use crate::icons;
-use crate::ui::{day_chart, day_label, dot, explained, hint, icon_button, section, segment_button, segmented_bar};
+use crate::ui::{day_chart, day_label, distribution_bar, dot, explained, hint, icon_button, section, segment_button, segmented_bar};
 
 /// How many days the chart shows.
 const CHART_DAYS: usize = 30;
@@ -21,23 +21,31 @@ const CHART_HEIGHT: f32 = 96.;
 /// How many days the per-day breakdown lists.
 const TABLE_DAYS: usize = 14;
 
+#[derive(Default)]
+pub struct LlmSettings {
+    pub choices: Option<Vec<ModelChoice>>,
+    pub finding: bool,
+    tab: Option<Cli>,
+    pub usage_by_day: bool,
+}
+
 impl FlashcardsApp {
     /// Asks the installed tools which models they offer, in the background.
     pub fn find_models(&mut self, cx: &mut Context<Self>) {
-        if self.finding_models {
+        if self.llm_settings.finding {
             return;
         }
-        self.finding_models = true;
+        self.llm_settings.finding = true;
         cx.notify();
         self.in_background(cx, dutch_flashcards_core::llm::available, |this, choices, _| {
-            this.finding_models = false;
-            this.llm_choices = Some(choices);
+            this.llm_settings.finding = false;
+            this.llm_settings.choices = Some(choices);
         });
     }
 
     /// Looks for the tools the first time Instellingen opens.
     pub fn find_models_once(&mut self, cx: &mut Context<Self>) {
-        if self.llm_choices.is_some() {
+        if self.llm_settings.choices.is_some() {
             return;
         }
         self.find_models(cx);
@@ -45,15 +53,14 @@ impl FlashcardsApp {
 
     /// The saved model among the ones on offer, if it is still there.
     fn chosen_model(&self) -> Option<&ModelChoice> {
-        self.llm_choices.as_ref()?.iter().find(|choice| choice.is(self.settings.cli, &self.settings.model))
+        self.llm_settings.choices.as_ref()?.iter().find(|choice| choice.is(self.settings.cli, &self.settings.model))
     }
 
     /// Answers from now on come from `choice`, thinking as near to `effort` as it offers.
-    fn choose_model(&mut self, choice: ModelChoice, effort: Effort, cx: &mut Context<Self>) {
-        let effort = choice.effort_for(effort);
-        (self.settings.cli, self.settings.model, self.settings.effort) = (choice.cli, choice.run_id(effort), effort);
-        self.llm.choose(choice.cli, &self.settings.model, effort);
-        self.llm_tab = Some(choice.cli);
+    fn choose_model(&mut self, cli: Cli, model: String, effort: Effort, cx: &mut Context<Self>) {
+        self.llm.choose(cli, &model, effort);
+        (self.settings.cli, self.settings.model, self.settings.effort) = (cli, model, effort);
+        self.llm_settings.tab = Some(cli);
         self.save_settings();
         cx.notify();
     }
@@ -62,20 +69,20 @@ impl FlashcardsApp {
     /// model picker: a tab per logged-in tool, its models, then the effort.
     pub fn render_llm(&self, cx: &mut Context<Self>) -> Div {
         let card = section(icons::model(), "Taalmodel", cx);
-        let Some(choices) = self.llm_choices.as_ref() else {
+        let Some(choices) = self.llm_settings.choices.as_ref() else {
             return card.child(hint("Ingelogde programma's zoeken…", cx));
         };
-        if choices.is_empty() {
-            return card.child(hint("Geen ingelogd programma gevonden. De app werkt met claude, codex, agy (Antigravity) of pi.", cx));
-        }
         let tools: Vec<Cli> = Cli::ALL.into_iter().filter(|cli| choices.iter().any(|choice| choice.cli == *cli)).collect();
-        let tab = self.llm_tab.filter(|cli| tools.contains(cli)).or(Some(self.settings.cli).filter(|cli| tools.contains(cli))).unwrap_or(tools[0]);
+        let Some(&first) = tools.first() else {
+            return card.child(hint("Geen ingelogd programma gevonden. De app werkt met claude, codex, agy (Antigravity) of pi.", cx));
+        };
+        let tab = [self.llm_settings.tab, Some(self.settings.cli)].into_iter().flatten().find(|cli| tools.contains(cli)).unwrap_or(first);
         let tabs = segmented_bar(cx).children(tools.iter().map(|cli| {
             let cli = *cli;
             segment_button(SharedString::from(format!("llm-tab-{}", cli.id())), cli.name(), tab == cli, cx)
                 .when(cli == self.settings.cli, |button| button.icon(icons::check()))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.llm_tab = Some(cli);
+                    this.llm_settings.tab = Some(cli);
                     cx.notify();
                 }))
         }));
@@ -83,13 +90,16 @@ impl FlashcardsApp {
         let chosen = self.chosen_model();
         let efforts = match chosen {
             Some(choice) if !choice.efforts.is_empty() => {
-                let choice = choice.clone();
                 segmented_bar(cx)
-                    .children(choice.efforts.clone().into_iter().map(|effort| {
-                        let choice = choice.clone();
+                    .children(choice.efforts.iter().copied().map(|effort| {
                         segment_button(SharedString::from(format!("effort-{}", effort.as_str())), effort.label(), self.settings.effort == effort, cx)
                             .when(effort == choice.default_effort, |button| button.tooltip("Standaard"))
-                            .on_click(cx.listener(move |this, _, _, cx| this.choose_model(choice.clone(), effort, cx)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(choice) = this.chosen_model() {
+                                    let effort = choice.effort_for(effort);
+                                    this.choose_model(choice.cli, choice.run_id(effort), effort, cx);
+                                }
+                            }))
                     }))
                     .into_any_element()
             }
@@ -101,7 +111,7 @@ impl FlashcardsApp {
                 .text_color(cx.theme().warning)
         });
         let refresh = icon_button("llm-refresh", icons::retry(), "Opnieuw zoeken")
-            .loading(self.finding_models)
+            .loading(self.llm_settings.finding)
             .on_click(cx.listener(|this, _, _, cx| this.find_models(cx)));
         let tools = h_flex().items_center().gap_1().child(tabs).child(refresh);
         card.child(setting_row("llm-tool", icons::model(), "Programma", "Een programma waarmee je op deze laptop bent ingelogd", tools, cx))
@@ -114,7 +124,7 @@ impl FlashcardsApp {
     fn model_row(&self, choice: &ModelChoice, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let theme = cx.theme().clone();
         let chosen = choice.is(self.settings.cli, &self.settings.model);
-        let pick = choice.clone();
+        let (cli, id) = (choice.cli, choice.id.clone());
         h_flex()
             .id(SharedString::from(format!("model-{}-{}", choice.cli.id(), choice.id)))
             .test_support()
@@ -127,10 +137,53 @@ impl FlashcardsApp {
             .border_color(if chosen { theme.primary.opacity(0.5) } else { theme.border })
             .when(chosen, |row| row.bg(theme.accent).text_color(theme.accent_foreground))
             .when(!chosen, |row| row.cursor_pointer().hover(move |style| style.bg(theme.muted)))
-            .on_click(cx.listener(move |this, _, _, cx| this.choose_model(pick.clone(), this.settings.effort, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(choice) = this.llm_settings.choices.iter().flatten().find(|choice| choice.cli == cli && choice.id == id) {
+                    let effort = choice.effort_for(this.settings.effort);
+                    this.choose_model(cli, choice.run_id(effort), effort, cx);
+                }
+            }))
             .child(div().flex_1().min_w_0().truncate().when(chosen, |name| name.font_weight(FontWeight::SEMIBOLD)).child(choice.name.clone()))
             .when(chosen, |row| row.child(icons::check().size_4().flex_none()))
             .into_any_element()
+    }
+
+    /// Which model answers and how hard it thinks, as a small badge: a chip
+    /// and the model, a gauge and the effort. Clicking it opens the choice in
+    /// Instellingen.
+    pub fn render_llm_badge(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let chosen = self.chosen_model();
+        let model = chosen.map_or_else(|| model_label(self.settings.cli, &self.settings.model), |choice| choice.name.clone());
+        // A model known to offer no choice of effort thinks as it always does.
+        let effort = chosen.is_none_or(|choice| !choice.efforts.is_empty()).then_some(self.settings.effort);
+        let mut tip = format!("{model} via {}", self.settings.cli.name());
+        if let Some(effort) = effort {
+            tip += &format!(", denkwerk {}", effort.label().to_lowercase());
+        }
+        tip += ". Klik om te wijzigen.";
+        let part = |icon: Icon, text: String| h_flex().gap_1().items_center().child(icon.size_3p5()).child(text);
+        explained("talk-llm", tip)
+            .test_support()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_2p5()
+            .px_2()
+            .py_1()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(theme.border)
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .cursor_pointer()
+            .hover(move |style| style.bg(theme.muted))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.show(crate::app::Screen::Settings, window, cx);
+                this.settings_scroll.scroll_to_item(crate::settings::LLM_SECTION);
+            }))
+            .child(part(icons::model(), model))
+            .when_some(effort, |badge, effort| badge.child(part(icons::effort(), effort.label().to_string())))
     }
 
     /// How many tokens the language models used for this app: in all, per
@@ -166,10 +219,10 @@ impl FlashcardsApp {
     /// Per model or per day: answers, share of the tokens and tokens.
     fn render_breakdown(&self, summary: &UsageSummary, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
-        let by_day = self.usage_by_day;
+        let by_day = self.llm_settings.usage_by_day;
         let toggle = segmented_bar(cx).children([(false, "Model"), (true, "Dag")].map(|(day, label)| {
             segment_button(if day { "usage-per-day" } else { "usage-per-model" }, label, by_day == day, cx).on_click(cx.listener(move |this, _, _, cx| {
-                this.usage_by_day = day;
+                this.llm_settings.usage_by_day = day;
                 cx.notify();
             }))
         }));
@@ -250,10 +303,7 @@ fn render_kinds(total: &UsageTotal, cx: &App) -> Div {
         ("Cache geschreven", "Tekst bewaard om later te hergebruiken", total.cache_write, theme.warning),
         ("Uitvoer", "Wat het model schreef", total.output, theme.success),
     ];
-    let all = total.tokens().max(1) as f32;
-    let bar = h_flex().h(px(8.)).w_full().rounded_full().overflow_hidden().bg(theme.secondary).children(
-        kinds.iter().filter(|(_, _, tokens, _)| *tokens > 0).map(|(_, _, tokens, color)| div().h_full().w(relative(*tokens as f32 / all)).bg(*color)),
-    );
+    let bar = distribution_bar(8., total.tokens(), kinds.map(|(_, _, tokens, color)| (tokens, color)), cx);
     let legend = h_flex().flex_wrap().gap_x_4().gap_y_1().children(kinds.iter().enumerate().map(|(index, (label, tip, tokens, color))| {
         explained(("usage-kind", index as u64), *tip)
             .flex()
@@ -265,6 +315,16 @@ fn render_kinds(total: &UsageTotal, cx: &App) -> Div {
             .child(div().font_weight(FontWeight::MEDIUM).child(compact(*tokens)))
     }));
     v_flex().gap_2().child(bar).child(legend)
+}
+
+/// The model's name before the tools have been asked for theirs: Claude's by
+/// name, Antigravity's without the effort it carries (`gemini-4-neon-high`).
+fn model_label(cli: Cli, model: &str) -> String {
+    let base = match model.rsplit_once('-') {
+        Some((base, effort)) if cli == Cli::Antigravity && Effort::parse(effort).is_some() => base,
+        _ => model,
+    };
+    model_name(base)
 }
 
 /// The colour of the `index`th model in the chart, the bars and the legend.
@@ -288,10 +348,18 @@ pub fn compact(count: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::compact;
+    use super::{compact, model_label};
+    use dutch_flashcards_core::llm::Cli;
 
     #[test]
     fn numbers_read_the_dutch_way() {
         assert_eq!([compact(950), compact(12_345), compact(4_560_000), compact(6_390_000_000)], ["950", "12,3k", "4,56 mln", "6,39 mld"]);
+    }
+
+    #[test]
+    fn models_are_named_without_their_effort() {
+        assert_eq!(model_label(Cli::ClaudeCode, "sonnet"), "Sonnet 5.5");
+        assert_eq!(model_label(Cli::Antigravity, "gemini-4-neon-high"), "gemini-4-neon");
+        assert_eq!(model_label(Cli::Codex, "gpt-high"), "gpt-high");
     }
 }

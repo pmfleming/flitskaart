@@ -4,6 +4,7 @@ use anyhow::{Context as _, Result, anyhow};
 use chrono::{DateTime, Local, NaiveTime, SecondsFormat, TimeZone, Utc};
 use turso::{Connection, Value};
 
+use crate::drafting_time::{RUNS_KEPT, Run};
 use crate::llm::{Cli, DEFAULT_MODEL, Effort};
 use crate::model::{Card, CardId, Grade, NewCard, Status, normalize};
 use crate::paths::Paths;
@@ -69,6 +70,15 @@ CREATE TABLE IF NOT EXISTS talks (
     lines INTEGER NOT NULL DEFAULT 0,
     spoken INTEGER NOT NULL DEFAULT 0,
     seconds REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS drafting_runs (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    cli TEXT NOT NULL,
+    model TEXT NOT NULL,
+    effort TEXT NOT NULL,
+    chars INTEGER NOT NULL,
+    seconds REAL NOT NULL
 );
 ";
 
@@ -234,8 +244,7 @@ pub struct Review<'a> {
     pub mode: Mode,
     /// Whether they opened the meaning.
     pub peeked: bool,
-    /// How long the card was shown before the score; saved up to
-    /// [`MAX_REVIEW_SECONDS`](crate::stats::MAX_REVIEW_SECONDS).
+    /// How long the card was shown before the score, capped at two minutes.
     pub seconds: Option<f64>,
 }
 
@@ -556,6 +565,39 @@ impl Store {
         Ok(())
     }
 
+    /// The recent timed runs of making cards, newest first.
+    pub fn drafting_runs(&self) -> Result<Vec<Run>> {
+        let rows = self.rows(
+            "SELECT cli, model, effort, chars, seconds FROM drafting_runs ORDER BY id DESC LIMIT ?1",
+            vec![Value::Integer(RUNS_KEPT as i64)],
+        )?;
+        Ok(rows
+            .iter()
+            .map(|row| Run {
+                cli: text(&row[0]),
+                model: text(&row[1]),
+                effort: text(&row[2]),
+                chars: integer(&row[3]).max(0) as usize,
+                seconds: real(&row[4]).unwrap_or(0.),
+            })
+            .collect())
+    }
+
+    /// Remembers how long making cards took, for estimating the next time.
+    pub fn record_drafting_run(&self, run: &Run, now: DateTime<Utc>) -> Result<()> {
+        self.exec(
+            "INSERT INTO drafting_runs (at, cli, model, effort, chars, seconds) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            vec![
+                stamp(now).into(),
+                run.cli.as_str().into(),
+                run.model.as_str().into(),
+                run.effort.as_str().into(),
+                Value::Integer(run.chars as i64),
+                Value::Real(run.seconds),
+            ],
+        )
+    }
+
     // ---- plumbing ----
 
     /// The id the last insert gave its row.
@@ -599,14 +641,14 @@ fn card_from_row(row: &[Value]) -> Result<Card> {
         reviews: integer(&row[9]),
         misses: integer(&row[10]),
         peeks: integer(&row[11]),
-        speech_accuracy: real(&row[12]),
+        speech_accuracy: real(&row[12]).map(|n| n as f32),
     })
 }
 
-fn real(value: &Value) -> Option<f32> {
+pub(crate) fn real(value: &Value) -> Option<f64> {
     match value {
-        Value::Real(n) => Some(*n as f32),
-        Value::Integer(n) => Some(*n as f32),
+        Value::Real(n) => Some(*n),
+        Value::Integer(n) => Some(*n as f64),
         _ => None,
     }
 }
@@ -652,6 +694,7 @@ mod tests {
         Appearance, CardId, DateTime, Gender, Grade, INPUT_BOOSTS, Mode, NewCard, Paths, Review, SCHEMA, Scheduler,
         Settings, Store, Utc, Value, boost_label, integer, snap_input_boost, text,
     };
+    use crate::drafting_time::Run;
     use crate::speech::{Assessment, assess};
     use crate::writing::Written;
     use chrono::Duration;
@@ -701,20 +744,7 @@ mod tests {
     }
 
     #[test]
-    fn new_cards_respect_the_daily_limit() {
-        let (_dir, store) = store();
-        let (now, scheduler) = (Utc::now(), Scheduler::exact());
-        let ids = deck(&store, &["een", "twee", "drie"], now);
-        assert_eq!(store.counts(now, 2).unwrap().new, 2);
-        for id in &ids[..2] {
-            store.record_review(*id, read(Grade::Easy, None, false), &scheduler, now).unwrap();
-        }
-        assert_eq!(store.counts(now, 2).unwrap().new, 0);
-        assert!(store.next_card(now, 2, &[]).unwrap().is_none());
-    }
-
-    #[test]
-    fn new_cards_come_shuffled_and_skipped_cards_are_left_out() {
+    fn new_cards_are_shuffled_and_respect_skips_and_the_daily_limit() {
         let (_dir, store) = store();
         let now = Utc::now();
         let ids = deck(&store, &["een", "twee", "drie", "vier", "vijf", "zes"], now);
@@ -727,6 +757,12 @@ mod tests {
         assert_eq!(next(&ids), 0, "all skipped");
         let card = store.card(ids[0]).unwrap().unwrap();
         assert_eq!((card.reviews, card.is_new(), store.unstudied().unwrap()), (0, true, 6), "skipping saves nothing");
+        assert_eq!(store.counts(now, 2).unwrap().new, 2);
+        for id in &ids[..2] {
+            store.record_review(*id, read(Grade::Easy, None, false), &Scheduler::exact(), now).unwrap();
+        }
+        assert_eq!(store.counts(now, 2).unwrap().new, 0);
+        assert!(store.next_card(now, 2, &[]).unwrap().is_none());
     }
 
     #[test]
@@ -747,7 +783,7 @@ mod tests {
     fn each_review_saves_how_it_counted() {
         let (_dir, store) = store();
         let (now, scheduler) = (Utc::now(), Scheduler::exact());
-        let ids = deck(&store, &["Ik heb kaas gekocht.", "Ik heb brood gekocht."], now);
+        let ids = deck(&store, &["Ik heb kaas gekocht.", "Ik heb brood gekocht.", "Ik heb er zin in."], now);
         let clear = assess("Ik heb kaas gekocht.", "Ik heb kaas gekocht.");
         let unclear = assess("Ik heb brood gekocht.", "Ik heb gekocht.");
         let a = store.record_review(ids[0], read(Grade::Comfortable, Some(&clear), false), &scheduler, now).unwrap();
@@ -757,32 +793,33 @@ mod tests {
         let a = store.record_review(ids[0], read(Grade::Comfortable, None, false), &scheduler, a.due.unwrap()).unwrap();
         store.record_review(ids[0], read(Grade::Easy, None, true), &scheduler, a.due.unwrap()).unwrap();
 
-        let saved = reviews(&store, "share, grade, own_grade, speech_grade, heard, suggested_grade");
-        let shares: Vec<_> = saved.iter().map(|row| row[0].clone()).collect();
+        let written = Written { accuracy: 0.7, grade: Grade::Hard };
+        let review = Review { written: Some(written), ..read(Grade::Easy, Some(&clear), false) };
+        store.record_review(ids[2], review, &scheduler, now).unwrap();
+
+        let saved = reviews(&store, "share, grade, own_grade, speech_grade, heard, suggested_grade, written_grade, written_accuracy");
         let share = Value::Real(crate::schedule::SCORE_ONLY_SHARE);
-        assert_eq!(shares, [Value::Real(1.0), Value::Real(1.0), share.clone(), share]);
+        let full = Value::Real(1.0);
+        assert!(saved.iter().map(|row| &row[0]).eq([&full, &full, &share, &share, &full]));
         let unclear_grade = integer(&saved[1][3]);
         assert!(unclear_grade < 4);
         assert_eq!((integer(&saved[1][1]), integer(&saved[1][2]), integer(&saved[1][5])), (4, 4, unclear_grade), "the reading only suggested a score");
         assert_eq!(text(&saved[1][4]), "Ik heb gekocht.");
         assert_eq!(saved[2][5], Value::Null, "nothing to suggest from");
         assert_eq!((integer(&saved[3][1]), integer(&saved[3][5])), (4, 2), "with the meaning open the app suggests Moeilijk, the score stays");
+        let written = &saved[4];
+        assert_eq!([1, 3, 5, 6].map(|index| integer(&written[index])), [4, 4, 2, 2], "the weaker test is suggested");
+        assert!(matches!(written[7], Value::Real(a) if (a - 0.7).abs() < 1e-6));
     }
 
     #[test]
-    fn writing_counts_as_a_test_and_the_weaker_test_is_suggested() {
+    fn drafting_runs_are_kept_newest_first() {
         let (_dir, store) = store();
-        let (now, scheduler) = (Utc::now(), Scheduler::exact());
-        let ids = deck(&store, &["Ik heb kaas gekocht."], now);
-        let clear = assess("Ik heb kaas gekocht.", "Ik heb kaas gekocht.");
-        let written = Written { accuracy: 0.7, grade: Grade::Hard };
-        let review = Review { written: Some(written), ..read(Grade::Easy, Some(&clear), false) };
-        store.record_review(ids[0], review, &scheduler, now).unwrap();
-        let saved = reviews(&store, "share, grade, speech_grade, written_grade, written_accuracy, suggested_grade");
-        assert_eq!(saved[0][0], Value::Real(1.0), "tested, so it counts in full");
-        assert_eq!((integer(&saved[0][1]), integer(&saved[0][2]), integer(&saved[0][3])), (4, 4, 2), "the own score set the grade");
-        assert_eq!(integer(&saved[0][5]), 2, "the weaker test was suggested");
-        assert!(matches!(saved[0][4], Value::Real(a) if (a - 0.7).abs() < 1e-6));
+        assert!(store.drafting_runs().unwrap().is_empty());
+        let run = |chars, seconds| Run { cli: "claude".into(), model: "opus".into(), effort: "high".into(), chars, seconds };
+        store.record_drafting_run(&run(1200, 31.5), Utc::now()).unwrap();
+        store.record_drafting_run(&run(400, 12.), Utc::now()).unwrap();
+        assert_eq!(store.drafting_runs().unwrap(), [run(400, 12.), run(1200, 31.5)]);
     }
 
     #[test]

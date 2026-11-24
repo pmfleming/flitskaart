@@ -7,8 +7,10 @@ mod capture;
 mod llm_settings;
 mod deck;
 mod drafts;
+mod dutch_field;
 mod icons;
 mod logging;
+mod making;
 mod mic_test;
 mod progress;
 mod recorder;
@@ -22,6 +24,7 @@ mod ui;
 mod writing;
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Duration;
 
 use dutch_flashcards_core::store::Appearance;
@@ -63,6 +66,20 @@ fn dev_args() -> DevArgs {
     out
 }
 
+/// The window's icon: `assets/app-icon.svg` drawn at 256 pixels. Bars and
+/// launchers that go by the app id look for an icon named `dutch-flashcards`
+/// instead.
+fn app_icon() -> Option<Arc<image::RgbaImage>> {
+    let png = include_bytes!("../assets/app-icon.png");
+    match image::load_from_memory_with_format(png, image::ImageFormat::Png) {
+        Ok(icon) => Some(Arc::new(icon.into_rgba8())),
+        Err(err) => {
+            logging::warn(format!("Het pictogram van het venster laadt niet: {err}"));
+            None
+        }
+    }
+}
+
 fn main() {
     let dev = dev_args();
     let paths = Paths::from_env();
@@ -82,6 +99,7 @@ fn main() {
             titlebar: Some(TitlebarOptions { title: Some("Nederlandse kaarten".into()), ..Default::default() }),
             app_id: Some("dutch-flashcards".into()),
             window_min_size: Some(size(px(560.), px(480.))),
+            icon: app_icon(),
             ..Default::default()
         };
         let opened = gpui_kit::open_window(options, cx, |window, cx| {
@@ -136,7 +154,7 @@ impl FlashcardsApp {
 
     fn replay_when_idle(&mut self, keys: VecDeque<String>, window: &mut Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| {
-            while this.update(cx, |this, _| this.busy() || this.finding_models).unwrap_or(false) {
+            while this.update(cx, |this, _| this.busy() || this.llm_settings.finding).unwrap_or(false) {
                 cx.background_executor().timer(Duration::from_millis(100)).await;
             }
             let _ = this.update_in(cx, |this, window, cx| this.replay_keys(keys, window, cx));

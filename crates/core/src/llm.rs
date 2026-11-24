@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 
 pub use detect::{ModelChoice, available};
 #[cfg(test)]
@@ -227,11 +227,21 @@ struct Ran {
     problem: String,
 }
 
+impl Ran {
+    fn reply(self, cli: Cli, parse: impl FnOnce(&str) -> Result<serde_json::Value>) -> Result<serde_json::Value> {
+        match parse(&self.stdout) {
+            Err(_) if !self.ok && !self.problem.is_empty() => bail!("{} gaf een fout: {}", cli.name(), self.problem),
+            result => result,
+        }
+    }
+}
+
 /// The JSON object in a model's text answer, without a code fence around it.
 fn json_in(text: &str) -> Result<serde_json::Value> {
     let start = text.find('{').context("geen JSON in het antwoord")?;
-    let end = text.rfind('}').context("geen JSON in het antwoord")?;
-    serde_json::from_str(&text[start..=end]).context("het antwoord was geen geldige JSON")
+    let object = &text[start..];
+    let end = object.rfind('}').context("geen JSON in het antwoord")?;
+    serde_json::from_str(&object[..=end]).context("het antwoord was geen geldige JSON")
 }
 
 /// Drops `null` fields, so missing answers fall back to their defaults.
@@ -260,6 +270,7 @@ mod tests {
     fn finds_the_json_in_a_text_answer() {
         assert_eq!(json_in("```json\n{\"a\": 1}\n```").unwrap()["a"], 1);
         assert!(json_in("geen json").is_err());
+        assert!(json_in("} {").is_err());
         assert_eq!(without_nulls(serde_json::json!({"a": null, "b": [{"c": null, "d": 1}]})), serde_json::json!({"b": [{"d": 1}]}));
     }
 

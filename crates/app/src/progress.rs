@@ -12,7 +12,7 @@ use gpui_kit::{
 
 use crate::app::{FlashcardsApp, Screen, go_buttons};
 use crate::icons;
-use crate::ui::{card_box, day_chart, day_label, dot, empty_state, explained, hint, surface, titled};
+use crate::ui::{card_box, day_chart, day_label, distribution_bar, dot, empty_state, explained, hint, surface, titled};
 
 const CHART_HEIGHT: f32 = 100.;
 /// The width of a skill's name, so the meters line up.
@@ -31,9 +31,9 @@ impl FlashcardsApp {
     }
 
     /// In a `narrow` window the four totals go two by two.
-    pub fn render_progress(&mut self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn render_progress(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let screen = v_flex().id("progress").size_full().overflow_y_scroll().p_5().pb_10().gap_4();
-        let Some(progress) = self.progress.clone() else { return screen };
+        let Some(progress) = &self.progress else { return screen };
         if !progress.started {
             let deck = progress.strength.total() + progress.strength.paused;
             let ways = if deck == 0 { vec![Screen::Talk, Screen::Add] } else { vec![Screen::Study, Screen::Talk] };
@@ -58,9 +58,9 @@ impl FlashcardsApp {
                 .gap_4()
                 .child(render_streak(progress.streak, &progress.week, cx))
                 .child(self.render_today(progress.today, cx)),
-            render_tiles(&progress, if narrow { 2 } else { 4 }, cx),
-            render_activity(&progress, cx),
-            h_flex().flex_wrap().items_stretch().gap_4().child(render_strength(&progress, cx)).child(render_skills(&progress, cx)),
+            render_tiles(progress, if narrow { 2 } else { 4 }, cx),
+            render_activity(progress, cx),
+            h_flex().flex_wrap().items_stretch().gap_4().child(render_strength(progress, cx)).child(render_skills(progress, cx)),
         ];
         screen.children(rows.map(|row| row.w_full().max_w(px(760.)).mx_auto()))
     }
@@ -114,26 +114,9 @@ fn render_streak(streak: Streak, week: &[(chrono::NaiveDate, bool)], cx: &App) -
         _ => "Je langste reeks tot nu toe.".to_string(),
     };
     let last = week.len().saturating_sub(1);
-    let week_row = h_flex().justify_between().gap_1().children(week.iter().enumerate().map(|(index, (day, practised))| {
-        let is_today = index == last;
-        let circle = div().size(px(26.)).rounded_full().flex().items_center().justify_center();
-        let circle = if *practised {
-            circle.bg(theme.primary).text_color(theme.primary_foreground).child(icons::check().size(px(14.)))
-        } else {
-            circle.border_1().border_color(if is_today { theme.primary } else { theme.border }).bg(theme.secondary)
-        };
-        let tip = format!("{}{}", day_label(*day), if *practised { ": geoefend" } else { "" });
-        explained(("streak-day", index as u64), tip)
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap_1()
-            .text_xs()
-            .text_color(if is_today { theme.foreground } else { theme.muted_foreground })
-            .when(is_today, |d| d.font_weight(FontWeight::SEMIBOLD))
-            .child(circle)
-            .child(weekday_short(*day))
-    }));
+    let week_row = h_flex().justify_between().gap_1().children(
+        week.iter().enumerate().map(|(index, &(day, practised))| streak_day(index, index == last, day, practised, cx))
+    );
     card_box(cx)
         .flex_1()
         .min_w(px(280.))
@@ -156,6 +139,27 @@ fn render_streak(streak: Streak, week: &[(chrono::NaiveDate, bool)], cx: &App) -
                 ),
         )
         .child(week_row)
+}
+
+fn streak_day(index: usize, is_today: bool, day: chrono::NaiveDate, practised: bool, cx: &App) -> impl IntoElement {
+    let theme = cx.theme();
+    let circle = div().size(px(26.)).rounded_full().flex().items_center().justify_center();
+    let circle = if practised {
+        circle.bg(theme.primary).text_color(theme.primary_foreground).child(icons::check().size(px(14.)))
+    } else {
+        circle.border_1().border_color(if is_today { theme.primary } else { theme.border }).bg(theme.secondary)
+    };
+    let tip = format!("{}{}", day_label(day), if practised { ": geoefend" } else { "" });
+    explained(("streak-day", index as u64), tip)
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_1()
+        .text_xs()
+        .text_color(if is_today { theme.foreground } else { theme.muted_foreground })
+        .when(is_today, |d| d.font_weight(FontWeight::SEMIBOLD))
+        .child(circle)
+        .child(weekday_short(day))
 }
 
 /// Four totals in `columns` columns, each explained on hover.
@@ -229,16 +233,9 @@ fn render_strength(progress: &Progress, cx: &App) -> Div {
         ("Groeit", growing, s.growing, theme.primary),
         ("Sterk", strong, s.strong, theme.success),
     ];
-    let total = s.total().max(1) as f32;
-    let bar = h_flex()
-        .h(px(10.))
-        .w_full()
-        .rounded_full()
-        .overflow_hidden()
-        .bg(theme.secondary)
-        .children(levels.iter().filter(|level| level.2 > 0).map(|(_, _, count, color)| div().h_full().w(relative(*count as f32 / total)).bg(*color)));
-    let legend = h_flex().flex_wrap().gap_x_4().gap_y_1().children(levels.iter().enumerate().map(|(index, (label, tip, count, color))| {
-        explained(("strength", index as u64), tip.clone()).child(legend_item(label, Some(*count), *color, cx))
+    let bar = distribution_bar(10., s.total() as u64, levels.iter().map(|level| (level.2 as u64, level.3)), cx);
+    let legend = h_flex().flex_wrap().gap_x_4().gap_y_1().children(levels.into_iter().enumerate().map(|(index, (label, tip, count, color))| {
+        explained(("strength", index as u64), tip).child(legend_item(label, Some(count), color, cx))
     }));
     let cards = if s.total() == 1 { "1 kaart".to_string() } else { format!("{} kaarten", s.total()) };
     card_box(cx)

@@ -20,10 +20,7 @@ pub(super) fn ask(llm: &Llm, system: &str, schema: &str, request: &str) -> Resul
     args.extend(["--print", &prompt]);
     let ran = llm.run(&args, "")?;
     llm.note(usage_in(llm, &ran.stdout));
-    match reply(&ran.stdout) {
-        Err(_) if !ran.ok && !ran.problem.is_empty() => bail!("Antigravity gaf een fout: {}", ran.problem),
-        result => result,
-    }
+    ran.reply(llm.cli, reply)
 }
 
 /// Whether a model's name ends in an effort, such as `gemini-4-neon-high`.
@@ -33,21 +30,15 @@ pub(super) fn has_effort(model: &str) -> bool {
 
 /// `gemini-4-neon-high` → (`gemini-4-neon`, High).
 pub(super) fn split_effort(model: &str) -> (&str, Option<Effort>) {
-    match model.rsplit_once('-') {
-        Some((base, suffix)) => match Effort::parse(suffix) {
-            Some(effort) => (base, Some(effort)),
-            None => (model, None),
-        },
-        None => (model, None),
-    }
+    model.rsplit_once('-').and_then(|(base, suffix)| Effort::parse(suffix).map(|effort| (base, Some(effort)))).unwrap_or((model, None))
 }
 
 fn reply(stdout: &str) -> Result<Value> {
-    let envelope: Value = serde_json::from_str(stdout.trim()).map_err(|_| anyhow::anyhow!("Antigravity gaf geen leesbaar antwoord"))?;
+    let mut envelope: Value = serde_json::from_str(stdout.trim()).map_err(|_| anyhow::anyhow!("Antigravity gaf geen leesbaar antwoord"))?;
     if envelope["status"] != "SUCCESS" {
         bail!("Antigravity gaf een fout: {}", envelope["error"].as_str().unwrap_or("onbekende fout"));
     }
-    match envelope["structured_output"].clone() {
+    match envelope["structured_output"].take() {
         Value::Null => super::json_in(envelope["response"].as_str().unwrap_or_default()).map(without_nulls),
         structured => Ok(without_nulls(structured)),
     }

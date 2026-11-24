@@ -1,3 +1,5 @@
+<img src="crates/app/assets/app-icon.svg" width="96" alt="The Flitskaart icon: a windmill with four coloured cards as sails">
+
 # Flitskaart
 
 A cheap way to learn a language - inspired by the flash cards I used to learn languages in the past.

@@ -33,14 +33,12 @@ fn main() -> anyhow::Result<()> {
         let Some(answer) = answers.next().transpose()? else { break };
         said = Some(Said { text: answer, spoken: false });
     }
-    let transcript = conversation.transcript();
+    let transcript = conversation.transcript(None);
     println!("{transcript}");
-    if make_cards {
-        if let Some((steer, limit)) = conversation.card_request() {
-            let (cards, recap) = drafting::review_conversation(&llm, &transcript, steer, limit)?;
-            eprintln!("{recap}");
-            println!("{}", serde_json::to_string_pretty(&cards)?);
-        }
+    if make_cards && let Some((steer, limit)) = conversation.card_request(None) {
+        let (cards, recap) = drafting::review_conversation(&llm, &transcript, steer, limit)?;
+        eprintln!("{recap}");
+        println!("{}", serde_json::to_string_pretty(&cards)?);
     }
     Ok(())
 }

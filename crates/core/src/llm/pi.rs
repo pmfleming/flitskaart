@@ -18,10 +18,7 @@ pub(super) fn ask(llm: &Llm, system: &str, schema: &str, request: &str) -> Resul
     }
     let ran = llm.run(&args, request)?;
     llm.note(usage_in(llm, &ran.stdout));
-    match reply(&ran.stdout) {
-        Err(_) if !ran.ok && !ran.problem.is_empty() => bail!("Pi gaf een fout: {}", ran.problem),
-        result => result,
-    }
+    ran.reply(llm.cli, reply)
 }
 
 /// The assistant's message at the end of the last turn.

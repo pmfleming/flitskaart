@@ -179,13 +179,12 @@ mod tests {
     use super::{Gender, Paths, Speaker, Speed, VOICES, voice, voices_for};
 
     #[test]
-    fn every_gender_has_a_voice_and_ids_are_unique() {
+    fn voice_ids_are_unique_and_unknown_voices_fall_back() {
         assert!(voices_for(Gender::Male).count() >= 1);
         assert!(voices_for(Gender::Female).count() >= 1);
-        let mut ids: Vec<_> = VOICES.iter().map(|v| v.id).collect();
-        ids.sort();
-        ids.dedup();
+        let ids: std::collections::HashSet<_> = VOICES.iter().map(|v| v.id).collect();
         assert_eq!(ids.len(), VOICES.len());
+        assert_eq!(voice("gone").id, VOICES[0].id);
     }
 
     #[test]
@@ -197,9 +196,5 @@ mod tests {
         assert_ne!(a, speaker.audio_path("Hallo.", voice("ronnie"), Speed::Normal));
         assert_ne!(a, speaker.audio_path("Hallo.", voice("pim"), Speed::Slow));
         assert_ne!(a, speaker.audio_path("Hallo.", voice("nathalie"), Speed::Normal));
-    }
-    #[test]
-    fn unknown_voice_ids_fall_back() {
-        assert_eq!(voice("gone").id, VOICES[0].id);
     }
 }

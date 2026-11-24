@@ -23,7 +23,11 @@ pub struct Listener {
 
 impl Listener {
     pub fn new(paths: &Paths) -> Listener {
-        Listener { whisper: program("DUTCH_FLASHCARDS_WHISPER", "whisper-cli"), model: paths.models().join(MODEL_FILE) }
+        Listener::with_program(program("DUTCH_FLASHCARDS_WHISPER", "whisper-cli"), paths.models().join(MODEL_FILE))
+    }
+
+    pub fn with_program(whisper: PathBuf, model: PathBuf) -> Listener {
+        Listener { whisper, model }
     }
 
     pub fn is_installed(&self) -> bool {

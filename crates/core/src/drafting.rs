@@ -141,13 +141,9 @@ mod tests {
         assert_eq!(cards[0].dutch, "Ik heb er zin in.");
         assert_eq!(cards[0].english, "I'm looking forward to it");
         assert_eq!(cards[1].note, "informeel");
-    }
-
-    #[test]
-    fn conversation_text_is_not_manual() {
-        assert!(parse_manual("Ik: Ik woon voor drie jaar in Utrecht.\nClaude: Bijna!").is_none());
-        assert!(parse_manual("Ik woon hier | I live here\nClaude: goed zo").is_none());
-        assert!(parse_manual("   ").is_none());
+        for text in ["Ik: Ik woon voor drie jaar in Utrecht.\nClaude: Bijna!", "Ik woon hier | I live here\nClaude: goed zo", "   "] {
+            assert!(parse_manual(text).is_none(), "{text:?}");
+        }
     }
 
     #[test]

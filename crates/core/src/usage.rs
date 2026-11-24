@@ -1,11 +1,14 @@
 //! What the language models have used: every answer's tokens, kept in the deck file and
 //! added up for Instellingen.
 
+use std::collections::HashSet;
+
 use anyhow::Result;
-use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use turso::Value;
 
 use crate::llm::Usage;
+use crate::stats::{day_of, days_ending};
 use crate::store::{Store, integer, parse_stamp, stamp, text};
 
 /// Tokens added up over some answers.
@@ -47,37 +50,29 @@ pub struct UsageSummary {
 
 /// Adds up `entries` (when, and what one model used for one answer). An
 /// answer's entries share their moment, which counts it once.
-pub fn summarize(entries: &[(DateTime<Utc>, Usage)], now: DateTime<Utc>, days: usize) -> UsageSummary {
+fn summarize(entries: &[(DateTime<Utc>, Usage)], now: DateTime<Utc>, days: usize) -> UsageSummary {
     let mut summary = UsageSummary::default();
-    let mut answers: Vec<DateTime<Utc>> = Vec::new();
+    let mut answers = HashSet::new();
     for (at, usage) in entries {
-        let new_answer = !answers.contains(at);
-        if new_answer {
-            answers.push(*at);
-        }
-        let calls = u64::from(new_answer);
+        let calls = u64::from(answers.insert(*at));
         summary.total.add(usage);
         summary.total.calls += calls;
         let model = entry(&mut summary.by_model, usage.model.clone());
         model.add(usage);
         model.calls += 1;
-        let day = at.with_timezone(&Local).date_naive();
-        let today = entry(&mut summary.by_day, day);
+        let today = entry(&mut summary.by_day, day_of(*at));
         today.add(usage);
         today.calls += calls;
     }
     summary.by_model.sort_by_key(|(_, total)| std::cmp::Reverse(total.tokens()));
     summary.by_day.sort_by_key(|(date, _)| std::cmp::Reverse(*date));
-    let last = now.with_timezone(&Local).date_naive();
-    summary.daily = (0..days as i64)
-        .rev()
-        .map(|back| last - Duration::days(back))
+    summary.daily = days_ending(day_of(now), days as i64)
         .map(|day| {
             let per_model = summary
                 .by_model
                 .iter()
                 .map(|(model, _)| {
-                    let on_day = entries.iter().filter(|(at, usage)| usage.model == *model && at.with_timezone(&Local).date_naive() == day);
+                    let on_day = entries.iter().filter(|(at, usage)| usage.model == *model && day_of(*at) == day);
                     on_day.map(|(_, usage)| usage.tokens()).sum()
                 })
                 .collect();
