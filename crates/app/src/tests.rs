@@ -92,6 +92,11 @@ fn a_deck_from_paste_to_practice(cx: &mut TestAppContext) {
     // Lezen: write the card with one wrong key, fixed with Backspace; the
     // writing then grades the review. Every key goes to the writing meanwhile.
     app.show(cx, Screen::Study);
+    // Skipping moves on and saves nothing; the card comes back when the rest is done.
+    let skipped = app.read(cx, |app| app.study.card.as_ref().unwrap().id);
+    app.click(cx, ["skip".into()]);
+    assert!(app.read(cx, |app| app.study.card.as_ref().is_some_and(|card| card.id != skipped) && app.study.reviewed_today == 0));
+    assert_eq!(app.read(cx, |app| app.store.card(skipped).unwrap().unwrap().reviews), 0);
     let dutch = app.read(cx, |app| app.study.card.as_ref().unwrap().dutch.clone());
     let letters: Vec<String> = dutch.chars().filter(|c| c.is_alphanumeric()).map(|c| c.to_lowercase().to_string()).collect();
     app.press(cx, "w q");

@@ -384,22 +384,25 @@ impl Store {
 
     /// The next card to study: due reviews first, then new cards up to the daily
     /// limit, then cards from earlier in the session that come back within 20 minutes.
-    pub fn next_card(&self, now: DateTime<Utc>, new_per_day: u32) -> Result<Option<Card>> {
+    /// The `skipped` cards are left out.
+    pub fn next_card(&self, now: DateTime<Utc>, new_per_day: u32, skipped: &[CardId]) -> Result<Option<Card>> {
+        let ids: Vec<String> = skipped.iter().map(ToString::to_string).collect();
+        let not_skipped = if ids.is_empty() { String::new() } else { format!(" AND id NOT IN ({})", ids.join(", ")) };
         let due = self.cards_where(
-            "status = 'active' AND reviews > 0 AND due <= ?1 ORDER BY due, id LIMIT 1",
+            &format!("status = 'active' AND reviews > 0 AND due <= ?1{not_skipped} ORDER BY due, id LIMIT 1"),
             vec![stamp(now).into()],
         )?;
         if let Some(card) = due.into_iter().next() {
             return Ok(Some(card));
         }
         if self.new_allowed(now, new_per_day)? > 0 {
-            let new = self.cards_where("status = 'active' AND reviews = 0 ORDER BY activated_at, id LIMIT 1", vec![])?;
+            let new = self.cards_where(&format!("status = 'active' AND reviews = 0{not_skipped} ORDER BY activated_at, id LIMIT 1"), vec![])?;
             if let Some(card) = new.into_iter().next() {
                 return Ok(Some(card));
             }
         }
         let soon = self.cards_where(
-            "status = 'active' AND reviews > 0 AND due <= ?1 ORDER BY due, id LIMIT 1",
+            &format!("status = 'active' AND reviews > 0 AND due <= ?1{not_skipped} ORDER BY due, id LIMIT 1"),
             vec![stamp(now + Duration::minutes(20)).into()],
         )?;
         Ok(soon.into_iter().next())
@@ -635,10 +638,10 @@ mod tests {
         assert_eq!((card.reviews, card.misses, card.peeks), (1, 1, 1));
         assert!(card.due.unwrap() > now);
         assert_eq!(store.counts(now, 10).unwrap().due, 0, "comes back later in the session, not now");
-        assert_eq!(store.next_card(now, 10).unwrap().map(|c| c.id), Some(id), "learn-ahead within 20 minutes");
+        assert_eq!(store.next_card(now, 10, &[]).unwrap().map(|c| c.id), Some(id), "learn-ahead within 20 minutes");
         let card = store.record_review(id, read(Grade::Easy, None, false), &scheduler, card.due.unwrap()).unwrap();
         assert!(card.due.unwrap() - now > Duration::hours(12));
-        assert!(store.next_card(now + Duration::hours(1), 10).unwrap().is_none());
+        assert!(store.next_card(now + Duration::hours(1), 10, &[]).unwrap().is_none());
         assert!(store.next_due_after(now).unwrap().is_some());
     }
 
@@ -652,7 +655,20 @@ mod tests {
             store.record_review(*id, read(Grade::Easy, None, false), &scheduler, now).unwrap();
         }
         assert_eq!(store.counts(now, 2).unwrap().new, 0);
-        assert!(store.next_card(now, 2).unwrap().is_none());
+        assert!(store.next_card(now, 2, &[]).unwrap().is_none());
+    }
+
+    #[test]
+    fn skipped_cards_are_left_out_and_unchanged() {
+        let (_dir, store) = store();
+        let now = Utc::now();
+        let ids = deck(&store, &["een", "twee"], now);
+        let next = |skipped: &[CardId]| store.next_card(now, 10, skipped).unwrap().map(|card| card.id);
+        assert_eq!(next(&[]), Some(ids[0]));
+        assert_eq!(next(&ids[..1]), Some(ids[1]));
+        assert_eq!(next(&ids), None);
+        let card = store.card(ids[0]).unwrap().unwrap();
+        assert_eq!((card.reviews, card.is_new()), (0, true), "skipping saves nothing");
     }
 
     #[test]
@@ -663,7 +679,7 @@ mod tests {
         assert!(store.update_text(id, "  ", "", "", "").is_err(), "the Dutch can't be blank");
         store.record_review(id, read(Grade::Hard, None, false), &Scheduler::exact(), now).unwrap();
         store.set_suspended(id, true).unwrap();
-        assert!(store.next_card(now + Duration::days(30), 10).unwrap().is_none());
+        assert!(store.next_card(now + Duration::days(30), 10, &[]).unwrap().is_none());
         store.reset(id, now).unwrap();
         assert!(store.card(id).unwrap().unwrap().is_new());
         assert_eq!(store.deck("REKENING").unwrap().len(), 1, "search ignores case");

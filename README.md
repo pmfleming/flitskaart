@@ -32,6 +32,9 @@ The two tests:
   The grade is the share of letters right first time, on the same 1–4 scale as
   speaking; a fixed letter doesn't count as right. Writing it again doesn't
   change the grade.
+- **Overslaan** (`S`) – moves on without saving anything about the card: no
+  score, no change to when it comes back. A skipped card returns once nothing
+  else is waiting in this session.
 
 The helpers, top right in the card (they never decide the review):
 
@@ -67,6 +70,7 @@ understood: 95%+ is 4 (Heel duidelijk), 85%+ is 3, 65%+ is 2, less is 1.
 | `Space` | Test the reading (or stop the recording); in Luisteren, show the text |
 | `1`–`4` | Score the card and go to the next one |
 | `W` | Write the card (`Backspace` fixes, `Enter` finishes, `Esc` stops) |
+| `S` | Skip the card for now |
 | `R` / `O` | Test again / play your own recording |
 | `Esc` | Cancel a recording |
 | `V` | Show or hide the meaning |

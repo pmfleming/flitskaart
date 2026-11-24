@@ -42,6 +42,8 @@ icons! {
     read,
     /// Schrijf: a pencil filling in the blanks.
     write,
+    /// Overslaan: an arrow past a card to the next.
+    skip,
     /// Toon tekst: an open eye.
     reveal,
     /// Mijn opname: a microphone with a play button.

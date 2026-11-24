@@ -6,7 +6,7 @@ use dutch_flashcards_core::speech::{Assessment, missed_ranges};
 use dutch_flashcards_core::store::{Counts, Mode, Review};
 use dutch_flashcards_core::voice::Speed;
 use dutch_flashcards_core::writing::{Writing, Written};
-use dutch_flashcards_core::{Card, Grade};
+use dutch_flashcards_core::{Card, CardId, Grade};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Colorize as _, Disableable as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -35,6 +35,8 @@ pub struct StudyState {
     pub scheduler: Scheduler,
     /// Counts writings, so each one's letters animate afresh.
     pub write_round: u64,
+    /// Cards skipped this session; they come back when nothing else is waiting.
+    pub skipped: Vec<CardId>,
 }
 
 /// What the learner has done with the current card so far.
@@ -83,7 +85,7 @@ impl Attempt {
 
 impl StudyState {
     pub fn new(mode: Mode, cx: &mut App) -> Self {
-        StudyState { focus: cx.focus_handle(), mode, card: None, counts: Counts::default(), reviewed_today: 0, attempt: Attempt::default(), scheduler: Scheduler::default(), write_round: 0 }
+        StudyState { focus: cx.focus_handle(), mode, card: None, counts: Counts::default(), reviewed_today: 0, attempt: Attempt::default(), scheduler: Scheduler::default(), write_round: 0, skipped: Vec::new() }
     }
 
     /// Scores are open from the start in Lezen, and once the text is shown in Luisteren.
@@ -135,9 +137,25 @@ impl FlashcardsApp {
     pub fn load_next_card(&mut self, cx: &mut Context<Self>) {
         let (now, per_day) = (Self::now(), self.settings.new_per_day);
         self.study.counts = self.store.counts(now, per_day).unwrap_or_default();
-        match self.store.next_card(now, per_day) {
+        let mut next = self.store.next_card(now, per_day, &self.study.skipped);
+        // Skipped cards come back once nothing else is waiting.
+        if matches!(next, Ok(None)) && !self.study.skipped.is_empty() {
+            self.study.skipped.clear();
+            next = self.store.next_card(now, per_day, &[]);
+        }
+        match next {
             Ok(card) => self.start_card(card, cx),
             Err(err) => self.error(format!("{err:#}")),
+        }
+    }
+
+    /// Moves on without saving anything about this card; it comes back later.
+    fn skip(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.study.card.as_ref().map(|card| card.id).filter(|_| !self.busy_listening()) else { return };
+        self.study.skipped.push(id);
+        self.load_next_card(cx);
+        if self.study.card.as_ref().is_some_and(|card| card.id == id) {
+            self.info("Er is geen andere kaart om te oefenen.", cx);
         }
     }
 
@@ -228,6 +246,7 @@ impl FlashcardsApp {
         }
         match key {
             "w" => self.start_writing(cx),
+            "s" => self.skip(cx),
             "space" => self.advance(cx),
             "escape" if self.study.attempt.capture.is_on() => self.cancel_recording(cx),
             "r" => self.start_recording(cx),
@@ -462,7 +481,16 @@ impl FlashcardsApp {
         let write = action("write", icon, label, tip)
             .disabled(self.busy_listening())
             .on_click(self.study_click(|this, cx| if this.writing_now() { this.finish_writing(cx) } else { this.start_writing(cx) }, cx));
-        h_flex().gap_3().justify_center().children(first).child(write)
+        let skip = Button::new("skip")
+            .outline()
+            .large()
+            .tab_stop(false)
+            .icon(icons::skip())
+            .label("Overslaan")
+            .tooltip("Later in deze sessie; telt niet mee (S)")
+            .disabled(self.busy_listening())
+            .on_click(self.study_click(Self::skip, cx));
+        h_flex().gap_3().justify_center().children(first).child(write).child(skip)
     }
 
     /// The four scores: how easily the sentence came back. Nothing else.
