@@ -44,7 +44,8 @@ const SCHEMA: &str = r#"{
         "required": ["dutch", "english", "note", "tag"],
         "additionalProperties": false
       }
-    }
+    },
+    "recap": {"type": "string"}
   },
   "required": ["cards"],
   "additionalProperties": false
@@ -98,6 +99,17 @@ pub fn draft_cards(claude: &Claude, snippet: &str, steer: &str, limit: usize) ->
         bail!("Plak eerst een stuk van een gesprek.");
     }
     cards_from(claude.ask(INSTRUCTIONS, SCHEMA, &request_text(snippet, steer, limit))?, limit)
+}
+
+/// Reviews a finished Gesprek in the same call that extracts its cards.
+pub fn review_conversation(claude: &Claude, transcript: &str, steer: &str, limit: usize) -> Result<(Vec<NewCard>, String)> {
+    let request = request_text(transcript, steer, limit);
+    let request = format!(
+        "This is a finished Gesprek session. Also write \"recap\" in simple Dutch, directly addressing the learner as \"je\". Give one short sentence about what they discussed and, if there was a clear learning need, one phrase worth remembering. Base it on the learner's own lines.\n{request}"
+    );
+    let answer = claude.ask(INSTRUCTIONS, SCHEMA, &request)?;
+    let recap = answer["recap"].as_str().unwrap_or_default().trim().chars().take(400).collect();
+    Ok((cards_from(answer, limit)?, recap))
 }
 
 /// The usable cards in Claude's answer: no blanks or repeats, at most `limit`.

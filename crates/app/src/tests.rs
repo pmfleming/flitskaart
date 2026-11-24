@@ -160,10 +160,19 @@ fn settings_and_the_microphone_test(cx: &mut TestAppContext) {
 /// English and "dit weekend" as not understood, and asks what was bought;
 /// asked for cards, makes one of the correction.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
-cat > /dev/null
+request=$(cat)
 case "$*" in
-  *'"cards"'*) echo '{"is_error":false,"result":"","structured_output":{"cards":[{"dutch":"Ik ben naar de markt gegaan.","english":"I went to the market.","note":"Bij gaan hoort zijn.","tag":"grammatica"}]}}' ;;
+  *'"sources"'*) echo '{"is_error":false,"modelUsage":{"sonnet":{"webSearchRequests":1}},"structured_output":{"sources":[{"title":"De markt","url":"https://example.org/markt","date":"2026-11-24","facts":"Er is een markt op zaterdag."}]}}' ;;
+  *'"cards"'*) case "$request" in
+  *'Leervraag: Beleefd om hulp vragen'*) echo '{"is_error":false,"structured_output":{"recap":"Je vroeg hoe je beleefd om hulp vraagt.","cards":[{"dutch":"Zou u mij kunnen helpen?","english":"Could you help me?","note":"Dit is beleefd.","tag":"hulp"}]}}' ;;
+  *) echo '{"is_error":false,"structured_output":{"cards":[{"dutch":"Ik ben naar de markt gegaan.","english":"I went to the market.","note":"Bij gaan hoort zijn.","tag":"grammatica"}]}}' ;;
+  esac ;;
+  *) case "$request" in
+  *'"opening":true'*) echo '{"is_error":false,"structured_output":{"corrected":"","explanation":"","reply":"Ik ga graag naar de markt. Wat heb je dit weekend gedaan?","reply_english":"I like going to the market.","partner":{"name":"Noor","role":"marktliefhebber","opinion":"Ik ga graag naar de markt.","reason":"Ik winkel het liefst buiten."}}}' ;;
+  *'"newest":{'*'"text":"Hoe vraag ik beleefd om hulp?"'*) echo '{"is_error":false,"structured_output":{"corrected":"","explanation":"","reply":"Zou u mij kunnen helpen?","reply_english":"Could you help me?","learning_need":"Beleefd om hulp vragen: Zou u mij kunnen helpen?"}}' ;;
+  *'"newest":{'*'"text":"Tot ziens!"'*) echo '{"is_error":false,"structured_output":{"corrected":"","explanation":"","reply":"Tot ziens!","reply_english":"Goodbye!","finished":true}}' ;;
   *) echo '{"is_error":false,"result":"","structured_output":{"corrected":"Ik ben naar de markt gegaan.","explanation":"Bij gaan hoort zijn.","english_used":[{"english":"market","dutch":"de markt"}],"not_understood":["dit weekend"],"reply":"Leuk! Wat heb je gekocht?","reply_english":"Nice! What did you buy?"}}' ;;
+  esac ;;
 esac
 "#;
 
@@ -178,14 +187,15 @@ fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
     std::fs::write(&program, FAKE_CLAUDE).unwrap();
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     let missing = app.dir.path().join("geen-claude");
-    app.act(cx, |app, _, _| app.claude.program = missing);
+    app.act(cx, |app, _, _| app.claude.program = missing.clone());
     app.show(cx, Screen::Talk);
     app.click(cx, ["topic-Het weekend".into()]);
     assert!(app.read(cx, |app| app.talk.current.is_none() && app.talk.error.is_some()), "back to the topics when Claude can't start");
 
-    app.act(cx, |app, _, _| app.claude.program = program);
+    app.act(cx, |app, _, _| app.claude.program = program.clone());
     app.click(cx, ["topic-Het weekend".into()]);
     assert_eq!(app.read(cx, |app| app.talk.current.as_ref().map(|c| (c.topic.clone(), c.lines.len()))), Some(("Het weekend".into(), 1)));
+    assert!(app.read(cx, |app| app.talk.current.as_ref().is_some_and(|c| c.sources.len() == 1 && c.partner.as_ref().is_some_and(|p| p.name == "Noor"))));
     app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Ik heb naar de market gegaan", window, cx)));
     app.click(cx, ["talk-send".into()]);
     let corrected = app.read(cx, |app| app.talk.current.as_ref().unwrap().lines[1].corrected.clone());
@@ -202,4 +212,26 @@ fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
     assert_eq!(app.read(cx, |app| (app.screen, app.drafts.len(), app.talk.current.is_none())), (Screen::Drafts, 1, true));
     let source = app.read(cx, |app| app.drafts[0].snippet_id.and_then(|id| app.store.snippet(id).unwrap()).unwrap());
     assert!(source.starts_with("Gesprek over: Het weekend") && source.contains("In het Engels gezegd: market = de markt"), "{source}");
+
+    app.show(cx, Screen::Talk);
+    app.click(cx, ["topic-Het weekend".into()]);
+    app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Hoe vraag ik beleefd om hulp?", window, cx)));
+    app.click(cx, ["talk-send".into()]);
+    assert!(app.read(cx, |app| app.talk.current.as_ref().unwrap().transcript().contains("Leervraag: Beleefd om hulp vragen")));
+    app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Tot ziens!", window, cx)));
+    app.click(cx, ["talk-send".into()]);
+    assert!(app.read(cx, |app| app.talk.current.is_none() && app.drafts.len() == 2), "goodbye closes and reviews the transcript");
+    assert_eq!(app.read(cx, |app| app.store.drafts().unwrap()[1].dutch.clone()), "Zou u mij kunnen helpen?");
+
+    app.show(cx, Screen::Talk);
+    app.click(cx, ["talk-recap".into()]);
+    app.click(cx, ["topic-Het weekend".into()]);
+    app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Hoe vraag ik beleefd om hulp?", window, cx)));
+    app.click(cx, ["talk-send".into()]);
+    app.act(cx, |app, _, _| app.claude.program = missing);
+    app.click(cx, ["talk-finish".into()]);
+    assert!(app.read(cx, |app| app.talk.current.is_none() && app.talk.error.is_some() && app.drafts.len() == 2));
+    app.act(cx, |app, _, _| app.claude.program = program);
+    app.click(cx, ["talk-retry-cards".into()]);
+    assert_eq!(app.read(cx, |app| app.drafts.len()), 3);
 }

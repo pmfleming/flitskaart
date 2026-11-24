@@ -259,18 +259,13 @@ impl Store {
     /// Stores drafted cards for review. Returns their ids.
     pub fn add_drafts(&self, snippet_id: Option<i64>, cards: &[NewCard], now: DateTime<Utc>) -> Result<Vec<CardId>> {
         let schedule = serde_json::to_string(&new_schedule(now))?;
-        let mut ids = Vec::new();
-        for card in cards {
-            let dutch = card.dutch.trim();
-            if dutch.is_empty() {
-                continue;
-            }
-            self.exec(
+        let statements = cards.iter().filter(|card| !card.dutch.trim().is_empty()).map(|card| {
+            (
                 "INSERT INTO cards (dutch, dutch_key, english, note, tags, status, snippet_id, created_at, schedule)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?7, ?8)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?7, ?8) RETURNING id",
                 vec![
-                    dutch.into(),
-                    normalize(dutch).into(),
+                    card.dutch.trim().into(),
+                    normalize(&card.dutch).into(),
                     card.english.trim().into(),
                     card.note.trim().into(),
                     card.tag.trim().into(),
@@ -278,10 +273,10 @@ impl Store {
                     stamp(now).into(),
                     schedule.clone().into(),
                 ],
-            )?;
-            ids.push(self.conn.last_insert_rowid());
-        }
-        Ok(ids)
+            )
+        });
+        let results = pollster::block_on(self.conn.transactional_batch(statements, turso::transaction::TransactionBehavior::Immediate))?;
+        results.iter().flat_map(|result| result.rows()).map(|row| Ok(row.get(0)?)).collect()
     }
 
     pub fn drafts(&self) -> Result<Vec<Card>> {

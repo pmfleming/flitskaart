@@ -95,9 +95,11 @@ Oefenen is open.
 ## Gesprek
 
 Practise speaking about a topic. Pick one of the topic tiles, type your own, or
-leave it open. Claude plays the other person and opens the conversation; the
-Dutch voice reads every line out loud. The buttons are icons, and each one
-names itself when you hover over it.
+leave it open. For a chosen topic, Claude looks up a little background and shows
+the sources above the conversation. A fictional partner opens with a point of
+view and helps you say what you mean in Dutch. The Dutch voice reads the partner’s
+lines out loud. If research finds no sources, you can still talk or retry the
+lookup before replying.
 
 Answer each line by typing (`Enter` or the send button) or with the
 speech-bubble button. Recording stops by itself when you finish, and Whisper
@@ -118,13 +120,13 @@ Every piece of Dutch plays: click a sentence (or the ear before it), the snail
 to hear it slowly, or a chip to hear that word. For your own lines, the
 corrected sentence is what plays.
 
-Sentences aren't rated. **Afronden** (the card stack, with a count) saves the
-conversation and has Claude draft cards from what you didn't know: the Dutch
-for what you said in English, the lines or words you didn't understand, and
-your corrected mistakes. The cards go to Concepten like any other drafts, and
-**Bron** shows the whole conversation with those notes. If there was nothing,
-the conversation is saved without cards. A conversation in progress is lost if
-you close the app.
+Choose **Afronden** any time or say goodbye in the conversation. The app saves
+the exchange first, then drafts cards for the Dutch you asked for or needed.
+That includes useful corrections, phrases you wanted to practise and words you
+asked how to say. Review the cards in **Concepten**. **Bron** shows the transcript
+and source links. Gesprek also offers a short **Terugblik** for the latest
+reviewed conversation. If drafting fails, retry it from Gesprek. A conversation
+in progress is lost if you close the app.
 
 ## Screens
 

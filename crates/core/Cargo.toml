@@ -15,6 +15,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 turso.workspace = true
+url = "2"
 
 [dev-dependencies]
 tempfile.workspace = true

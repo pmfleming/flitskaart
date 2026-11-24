@@ -27,13 +27,35 @@ impl Claude {
     /// which follows the JSON `schema`. Blocks for several seconds, so call it
     /// off the UI thread.
     pub fn ask(&self, system: &str, schema: &str, request: &str) -> Result<serde_json::Value> {
+        answer(&self.run(system, schema, request, &["--tools", ""])?)
+    }
+
+    /// Research only has access to public web search and fetch.
+    pub(crate) fn research(&self, system: &str, schema: &str, request: &str) -> Result<serde_json::Value> {
+        let tools = "WebSearch,WebFetch";
+        let stdout = self.run(system, schema, request, &[
+            "--tools", tools, "--allowed-tools", tools, "--permission-mode", "dontAsk", "--max-turns", "6",
+        ])?;
+        let result = answer(&stdout)?;
+        let envelope: serde_json::Value = serde_json::from_str(&stdout)?;
+        let searched = envelope["modelUsage"].as_object().is_some_and(|models| {
+            models.values().any(|usage| usage["webSearchRequests"].as_u64().unwrap_or(0) > 0)
+        }) || envelope["usage"]["server_tool_use"]["web_search_requests"].as_u64().unwrap_or(0) > 0;
+        if !searched {
+            bail!("Claude Code heeft geen webzoekopdracht uitgevoerd.");
+        }
+        Ok(result)
+    }
+
+    fn run(&self, system: &str, schema: &str, request: &str, tool_args: &[&str]) -> Result<String> {
         // Run outside any project so no project instructions are picked up.
         let workdir = std::env::temp_dir();
         let mut child = Command::new(&self.program)
             .current_dir(&workdir)
             .args(["-p", "--model", &self.model, "--output-format", "json", "--json-schema", schema])
             .args(["--system-prompt", system])
-            .args(["--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"])
+            .args(tool_args)
+            .args(["--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -47,7 +69,7 @@ impl Claude {
         if !output.status.success() && stdout.trim().is_empty() {
             bail!("Claude Code gaf een fout: {}", crate::voice::last_line(&output.stderr));
         }
-        answer(&stdout)
+        Ok(stdout.into_owned())
     }
 }
 

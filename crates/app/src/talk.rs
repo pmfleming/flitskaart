@@ -1,15 +1,12 @@
 //! Gesprek: a conversation in Dutch about a topic of the learner's choice.
-//! Claude plays the other person and the Dutch voice speaks its lines. The
-//! learner answers by typing or speaking; each answer comes back corrected
-//! with the next line. At the end, what they said in English or didn't
-//! understand, and their corrected mistakes, become draft cards.
+//! The partner has a researched point of view and helps with Dutch along the
+//! way. When the learner finishes, their language needs become draft cards.
 
 use std::ops::Range;
 
 use anyhow::Result;
-use dutch_flashcards_core::conversation::{self, Conversation, Line, Reply, Said, Who};
+use dutch_flashcards_core::conversation::{self, Conversation, Line, Reply, Said, Source, Who};
 use dutch_flashcards_core::drafting;
-use dutch_flashcards_core::model::NewCard;
 use dutch_flashcards_core::speech::{assess, missed_ranges, write_wav_16k};
 use dutch_flashcards_core::voice::Speed;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -23,7 +20,7 @@ use gpui_kit::{
     UnderlineStyle, Window, div, px,
 };
 
-use crate::app::FlashcardsApp;
+use crate::app::{FlashcardsApp, Screen};
 use crate::capture::Capture;
 use crate::icons;
 use crate::recorder::Captured;
@@ -52,8 +49,13 @@ pub struct TalkState {
     pub pending: Option<Said>,
     /// Waiting for Claude's next line.
     pub thinking: bool,
+    researching: bool,
     /// Claude is turning what the learner didn't know into cards.
     pub making_cards: bool,
+    card_job: Option<CardJob>,
+    recap: String,
+    show_recap: bool,
+    show_sources: bool,
     pub capture: Capture,
     /// Whisper is writing down what the learner said.
     pub hearing: bool,
@@ -62,6 +64,13 @@ pub struct TalkState {
     /// Bumped for each new conversation, so a late answer can't land in the next one.
     ticket: u64,
     _entered: [Subscription; 2],
+}
+
+#[derive(Clone)]
+struct CardJob {
+    snippet_id: i64,
+    transcript: String,
+    limit: usize,
 }
 
 impl TalkState {
@@ -85,7 +94,12 @@ impl TalkState {
             current: None,
             pending: None,
             thinking: false,
+            researching: false,
             making_cards: false,
+            card_job: None,
+            recap: String::new(),
+            show_recap: false,
+            show_sources: false,
             capture: Capture::default(),
             hearing: false,
             error: None,
@@ -103,7 +117,7 @@ impl TalkState {
 
     /// Recording, Whisper or Claude is busy with the learner's turn.
     pub fn busy(&self) -> bool {
-        self.capture.is_on() || self.hearing || self.thinking || self.making_cards
+        self.capture.is_on() || self.hearing || self.thinking || self.researching
     }
 
     /// The learner can answer: the partner has spoken and nothing is under way.
@@ -115,18 +129,50 @@ impl TalkState {
 impl FlashcardsApp {
     /// Starts a conversation on the topic typed (or none), and asks for its opening line.
     pub fn start_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.talk.current.is_some() {
+        if self.talk.current.is_some() || self.talk.making_cards {
             return;
         }
         let topic = self.talk.topic.read(cx).value().to_string();
-        self.talk.topic.update(cx, |state, cx| state.set_value("", window, cx));
+        self.talk.message.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+            state.focus(window, cx);
+        });
+        self.prepare_opening(&topic, cx);
+    }
+
+    fn prepare_opening(&mut self, topic: &str, cx: &mut Context<Self>) {
+        self.stop_audio();
+        self.talk.show_sources = false;
         self.talk.ticket += 1;
-        self.talk.current = Some(Conversation::new(&topic));
-        self.talk.message.update(cx, |state, cx| state.focus(window, cx));
-        self.ask_partner(None, cx);
+        let (ticket, claude) = (self.talk.ticket, self.claude.clone());
+        let current = Conversation::new(topic);
+        let topic = current.topic.clone();
+        self.talk.current = Some(current);
+        self.talk.error = None;
+        if topic.is_empty() {
+            return self.ask_partner(None, cx);
+        }
+        self.talk.researching = true;
+        self.in_background(cx, move || conversation::look_up(&claude, &topic), move |this, sources, cx| {
+            if this.talk.ticket != ticket {
+                return;
+            }
+            this.talk.researching = false;
+            if let Some(current) = &mut this.talk.current {
+                current.sources = sources.unwrap_or_else(|err| {
+                    crate::logging::error("gesprek: bronnen", format!("{err:#}"));
+                    Vec::new()
+                });
+            }
+            this.ask_partner(None, cx);
+        });
+        cx.notify();
     }
 
     fn start_with_topic(&mut self, topic: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.talk.making_cards {
+            return;
+        }
         self.talk.topic.update(cx, |state, cx| state.set_value(topic, window, cx));
         self.start_conversation(window, cx);
     }
@@ -149,7 +195,7 @@ impl FlashcardsApp {
         let (claude, ticket) = (self.claude.clone(), self.talk.ticket);
         (self.talk.pending, self.talk.thinking, self.talk.error) = (said, true, None);
         self.talk.scroll.scroll_to_bottom();
-        let job = move || conversation::next_turn(&claude, &request);
+        let job = move || conversation::continue_turn(&claude, &request);
         self.in_background(cx, job, move |this, reply, cx| {
             if this.talk.ticket == ticket {
                 this.talk.thinking = false;
@@ -159,12 +205,17 @@ impl FlashcardsApp {
         cx.notify();
     }
 
-    fn take_reply(&mut self, reply: Result<Reply>, cx: &mut Context<Self>) {
+    fn take_reply(&mut self, reply: Result<(Reply, Vec<Source>)>, cx: &mut Context<Self>) {
         let Some(current) = &mut self.talk.current else { return };
         match reply {
-            Ok(reply) => {
+            Ok((reply, sources)) => {
                 let line = reply.reply.clone();
+                let finished = reply.finished && self.talk.pending.is_some();
+                current.add_sources(sources);
                 current.add_turn(self.talk.pending.take(), reply);
+                if finished {
+                    return self.finish_conversation(cx);
+                }
                 self.talk.scroll.scroll_to_bottom();
                 self.say(line, cx);
             }
@@ -179,8 +230,10 @@ impl FlashcardsApp {
 
     /// Sends the sentence that failed to arrive once more.
     fn resend(&mut self, cx: &mut Context<Self>) {
-        if let Some(said) = self.talk.pending.take().filter(|_| !self.talk.busy()) {
-            self.ask_partner(Some(said), cx);
+        if !self.talk.busy() {
+            if let Some(said) = self.talk.pending.take() {
+                self.ask_partner(Some(said), cx);
+            }
         }
     }
 
@@ -197,7 +250,8 @@ impl FlashcardsApp {
 
     /// Lets Whisper write down the spoken answer, then sends it.
     fn heard_answer(&mut self, captured: Result<Captured>, cx: &mut Context<Self>) {
-        let path = self.paths.recordings().join("gesprek.wav");
+        let ticket = self.talk.ticket;
+        let path = self.paths.recordings().join(format!("gesprek-{ticket}.wav"));
         let saved = captured.and_then(|captured| {
             captured.had_speech.then(|| write_wav_16k(&path, &captured.samples, captured.rate, captured.channels)).transpose()
         });
@@ -206,11 +260,17 @@ impl FlashcardsApp {
             Ok(None) => return self.talk.error = Some(NOT_HEARD.into()),
             Err(err) => return self.talk.error = Some(crate::logging::error("gesprek", format!("{err:#}")).into()),
         }
-        let (listener, ticket) = (self.listener.clone(), self.talk.ticket);
-        self.in_background(cx, move || listener.transcribe(&path), move |this, heard, cx| {
+        let listener = self.listener.clone();
+        self.in_background(cx, move || {
+            let heard = listener.transcribe(&path);
+            let _ = std::fs::remove_file(path);
+            heard
+        }, move |this, heard, cx| {
+            if this.talk.ticket != ticket {
+                return;
+            }
             this.talk.hearing = false;
             match heard {
-                _ if this.talk.ticket != ticket => {}
                 Ok(text) if text.trim().is_empty() => this.talk.error = Some(NOT_HEARD.into()),
                 Ok(text) => this.ask_partner(Some(Said { text, spoken: true }), cx),
                 Err(err) => this.talk.error = Some(crate::logging::error("gesprek", format!("{err:#}")).into()),
@@ -264,34 +324,71 @@ impl FlashcardsApp {
     }
 
 
-    /// Afronden: keeps the conversation and turns what the learner didn't know into
-    /// drafts, then opens Concepten. Nothing said yet: just closes it.
-    fn finish_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(current) = self.talk.current.as_ref().filter(|_| !self.talk.busy()) else { return };
-        if !current.has_learner_lines() {
+    /// Save before leaving the conversation. Card drafting can then be retried
+    /// against the same saved source.
+    fn finish_conversation(&mut self, cx: &mut Context<Self>) {
+        let Some(mut current) = self.talk.current.clone() else { return };
+        if let Some(said) = self.talk.pending.clone() {
+            current.add_unanswered(said);
+        }
+        if current.lines.is_empty() {
             return self.close_conversation(cx);
         }
         let transcript = current.transcript();
-        let Some((steer, limit)) = current.card_request() else {
-            return match self.keep_conversation(&transcript, "", &[], window, cx) {
-                Ok(()) => self.info("Het gesprek is bewaard. Je hoefde niets in het Engels te zeggen en begreep alles, dus er zijn geen kaarten gemaakt.", cx),
-                Err(err) => self.talk.error = Some(crate::logging::error("gesprek", format!("{err:#}")).into()),
-            };
+        let request = current.card_request();
+        let steer = request.map_or("", |(steer, _)| steer);
+        let snippet_id = match self.store.add_snippet(&transcript, steer, Self::now()) {
+            Ok(id) => id,
+            Err(err) => {
+                self.talk.error = Some(crate::logging::error("gesprek", format!("Gesprek niet bewaard: {err:#}")).into());
+                return;
+            }
         };
-        self.stop_audio();
-        (self.talk.making_cards, self.talk.error) = (true, None);
+        self.close_conversation(cx);
+        if let Some((_, limit)) = request {
+            self.talk.card_job = Some(CardJob { snippet_id, transcript, limit });
+            self.talk.recap.clear();
+            self.talk.show_recap = false;
+            self.make_conversation_cards(cx);
+        } else {
+            self.info("Het gesprek is bewaard.", cx);
+        }
+    }
+
+    fn make_conversation_cards(&mut self, cx: &mut Context<Self>) {
+        let Some(job) = self.talk.card_job.clone().filter(|_| !self.talk.making_cards) else { return };
+        self.talk.making_cards = true;
+        self.talk.error = None;
         let claude = self.claude.clone();
-        let job = cx.background_executor().spawn(async move {
-            let cards = drafting::draft_cards(&claude, &transcript, steer, limit);
-            (transcript, cards)
+        let task = cx.background_executor().spawn(async move {
+            drafting::review_conversation(&claude, &job.transcript, conversation::CARD_STEER, job.limit)
         });
-        cx.spawn_in(window, async move |this, cx| {
-            let (transcript, cards) = job.await;
+        cx.spawn(async move |this, cx| {
+            let cards = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.talk.making_cards = false;
-                let kept = cards.and_then(|cards| this.keep_conversation(&transcript, steer, &cards, window, cx));
-                if let Err(err) = kept {
-                    this.talk.error = Some(crate::logging::error("gesprek", format!("Er zijn geen kaarten gemaakt: {err:#}")).into());
+                let saved = cards.and_then(|(cards, recap)| {
+                    let ids = this.store.add_drafts(Some(job.snippet_id), &cards, Self::now())?;
+                    Ok((ids, recap))
+                });
+                match saved {
+                    Ok((ids, recap)) => {
+                        this.talk.card_job = None;
+                        this.talk.recap = recap;
+                        if ids.is_empty() {
+                            this.info("Het gesprek is bewaard. Er waren geen bruikbare leervragen voor kaarten.", cx);
+                        } else {
+                            this.reload_drafts(window, cx);
+                            if this.screen == Screen::Talk {
+                                this.show(Screen::Drafts, window, cx);
+                            }
+                            this.info(format!("{} concepten uit je gesprek gemaakt.", ids.len()), cx);
+                        }
+                    }
+                    Err(err) => {
+                        let error = crate::logging::error("gesprek", format!("Het gesprek is bewaard. Kaarten maken is mislukt: {err:#}"));
+                        this.talk.error = Some(error.into());
+                    }
                 }
                 cx.notify();
             });
@@ -300,21 +397,12 @@ impl FlashcardsApp {
         cx.notify();
     }
 
-    /// Stores the conversation with its drafts (if any) and closes it.
-    fn keep_conversation(&mut self, transcript: &str, steer: &str, cards: &[NewCard], window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
-        if cards.is_empty() {
-            self.store.add_snippet(transcript, steer, Self::now())?;
-        } else {
-            self.keep_drafts(transcript, steer, cards, window, cx)?;
-        }
-        self.close_conversation(cx);
-        Ok(())
-    }
-
     fn close_conversation(&mut self, cx: &mut Context<Self>) {
         self.talk.ticket += 1;
         (self.talk.current, self.talk.pending, self.talk.error) = (None, None, None);
+        (self.talk.researching, self.talk.thinking, self.talk.hearing) = (false, false, false);
         self.talk.capture.cancel();
+        self.stop_audio();
         cx.notify();
     }
 
@@ -347,14 +435,16 @@ impl FlashcardsApp {
                 .child(div().text_sm().child(topic))
                 .test_support()
         });
-        let own = h_flex().gap_2().child(div().flex_1().child(Input::new(&self.talk.topic))).child(
+        let making = self.talk.making_cards;
+        let own = h_flex().gap_2().child(div().flex_1().child(Input::new(&self.talk.topic).disabled(making))).child(
             Button::new("talk-start")
                 .primary()
+                .disabled(making)
                 .icon(icons::send())
                 .label("Begin")
                 .on_click(cx.listener(|this, _, window, cx| this.start_conversation(window, cx))),
         );
-        let how = [(icons::speak(), "Spreek of typ"), (icons::english(), "Engels mag"), (icons::cards(), "Lastig wordt een kaart")].map(|(icon, text)| {
+        let how = [(icons::search(), "We zoeken je onderwerp op"), (icons::speak(), "Spreek of typ"), (icons::cards(), "Kaarten uit je gesprek")].map(|(icon, text)| {
             h_flex().gap_1p5().items_center().child(icon.size_4()).child(div().text_sm().child(text))
         });
         v_flex().flex_1().items_center().justify_center().child(
@@ -367,29 +457,44 @@ impl FlashcardsApp {
                 .child(div().grid().grid_cols(3).gap_3().children(tiles))
                 .child(own)
                 .child(h_flex().flex_wrap().justify_center().gap_5().text_color(theme.muted_foreground).children(how))
-                .children(self.render_talk_error(cx)),
+                .when(making, |d| d.child(div().text_sm().child("Kaarten maken…")))
+                .children(self.render_talk_error(cx))
+                .when(!making && self.talk.card_job.is_some(), |d| d.child(
+                    Button::new("talk-retry-cards").outline().label("Opnieuw kaarten maken")
+                        .on_click(cx.listener(|this, _, _, cx| this.make_conversation_cards(cx))),
+                ))
+                .when(!self.talk.recap.is_empty(), |d| d.child(
+                    v_flex().gap_2().items_start().child(
+                        Button::new("talk-recap").ghost().label("Terugblik op je vorige gesprek")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.talk.show_recap = !this.talk.show_recap;
+                                cx.notify();
+                            })),
+                    ).when(self.talk.show_recap, |d| d.child(div().text_sm().child(self.talk.recap.clone())))
+                )),
         )
     }
 
     fn render_conversation(&self, current: &Conversation, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let (gaps, making) = (current.gaps(), self.talk.making_cards);
+        let gaps = current.gaps();
         let topic = if current.topic.is_empty() { "Vrij gesprek".to_string() } else { current.topic.clone() };
         let finish = Button::new("talk-finish")
             .flex_none()
             .primary()
-            .loading(making)
-            .disabled(self.talk.busy())
-            .tooltip("Klaar: maak kaarten van wat lastig was")
+            .tooltip("Beëindig het gesprek en maak kaarten")
             .child(
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .when(!making, |d| d.child(icons::cards().size_4()))
-                    .child(if making { "Kaarten maken…" } else { "Afronden" })
-                    .when(gaps > 0 && !making, |d| d.child(pill(gaps.to_string(), theme.primary_foreground, theme.primary))),
+                    .child(icons::cards().size_4())
+                    .child("Afronden")
+                    .when(gaps > 0, |d| d.child(pill(gaps.to_string(), theme.primary_foreground, theme.primary))),
             )
-            .on_click(cx.listener(|this, _, window, cx| this.finish_conversation(window, cx)));
+            .on_click(cx.listener(|this, _, _, cx| this.finish_conversation(cx)));
+        let partner = current.partner.as_ref().map(|partner| {
+            div().text_sm().text_color(theme.muted_foreground).child(format!("{} · {} (fictief)", partner.name, partner.role))
+        });
         let header = h_flex()
             .gap_2p5()
             .items_center()
@@ -397,7 +502,7 @@ impl FlashcardsApp {
             .border_b_1()
             .border_color(theme.border)
             .child(topic_icon(&current.topic).size_5().text_color(theme.muted_foreground))
-            .child(div().flex_1().min_w_0().child(heading(topic)))
+            .child(v_flex().flex_1().min_w_0().child(heading(topic)).children(partner))
             .child(finish);
         let lines: Vec<AnyElement> = current.lines.iter().enumerate().map(|(index, line)| self.render_line(index, line, cx)).collect();
         let log = v_flex()
@@ -416,9 +521,51 @@ impl FlashcardsApp {
             .mx_auto()
             .gap_3()
             .child(header)
+            .children(self.render_sources(current, cx))
             .child(log)
             .children(self.render_talk_error(cx))
             .child(self.render_composer(cx))
+    }
+
+    fn render_sources(&self, current: &Conversation, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let muted = cx.theme().muted_foreground;
+        if !current.sources.is_empty() {
+            let visible = if self.talk.show_sources { current.sources.len() } else { 2 };
+            let links: Vec<_> = current.sources.iter().rev().take(visible).enumerate().map(|(index, source)| {
+                let url = source.url.clone();
+                let title: String = source.title.chars().take(58).collect();
+                let title = if title.len() < source.title.len() { format!("{title}…") } else { title };
+                let label = if source.date.is_empty() { title } else { format!("{title} · {}", source.date) };
+                Button::new(("talk-source", index as u64)).ghost().small().label(label).tooltip(source.title.clone())
+                    .on_click(move |_, _, cx| cx.open_url(&url))
+            }).collect();
+            let toggle = (current.sources.len() > 2).then(|| {
+                let label = if self.talk.show_sources { "Minder bronnen" } else { "Alle bronnen" };
+                Button::new("talk-all-sources").small().ghost().label(label)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.talk.show_sources = !this.talk.show_sources;
+                        cx.notify();
+                    }))
+            });
+            return Some(
+                div().id("talk-sources").max_h(px(115.)).overflow_y_scroll().child(
+                    h_flex().flex_wrap().items_center().gap_1()
+                        .child(div().text_xs().text_color(muted).child("Bronnen"))
+                        .children(links)
+                        .children(toggle),
+                ).into_any_element(),
+            );
+        }
+        if current.topic.is_empty() || current.lines.is_empty() {
+            return None;
+        }
+        let retry = (!current.has_learner_lines() && !self.talk.busy() && self.talk.pending.is_none()).then(|| {
+            let topic = current.topic.clone();
+            Button::new("talk-retry-research").ghost().small().label("Opnieuw zoeken")
+                .on_click(cx.listener(move |this, _, _, cx| this.prepare_opening(&topic, cx)))
+        });
+        Some(h_flex().items_center().gap_2().text_sm().text_color(muted)
+            .child("Geen bronnen gevonden").children(retry).into_any_element())
     }
 
     fn render_line(&self, index: usize, line: &Line, cx: &mut Context<Self>) -> AnyElement {
@@ -531,7 +678,9 @@ impl FlashcardsApp {
                 .children(retry)
                 .child(bubble(false, cx).opacity(0.6).child(div().text_lg().child(said.text.clone())))
         });
-        let waiting = if self.talk.thinking {
+        let waiting = if self.talk.researching {
+            Some(h_flex().w_full().child(bubble(true, cx).child(div().text_sm().child("Bronnen zoeken…"))))
+        } else if self.talk.thinking {
             Some(h_flex().w_full().child(bubble(true, cx).child(dots(&theme))))
         } else if self.talk.hearing {
             let heard = h_flex().gap_2().items_center().child(icons::listen().small().text_color(theme.muted_foreground)).child(dots(&theme));
