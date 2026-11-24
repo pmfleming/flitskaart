@@ -20,7 +20,6 @@ use crate::app::{FlashcardsApp, Screen};
 use crate::capture::Capture;
 use crate::icons;
 use crate::speaking::grade_color;
-use crate::app::go_buttons;
 use crate::ui::{
     card_box, empty_state, explained, hint, icon_button, keycap, pill, segment_button, segmented_bar, stat, surface,
 };
@@ -35,8 +34,12 @@ pub struct StudyState {
     pub scheduler: Scheduler,
     /// Counts writings, so each one's letters animate afresh.
     pub write_round: u64,
-    /// Cards skipped this session; they come back when nothing else is waiting.
+    /// Cards skipped this session; the rest screen offers them again.
     pub skipped: Vec<CardId>,
+    /// New cards allowed today beyond the daily limit, asked for this session.
+    pub extra_new: u32,
+    /// Tells the wake-up timer for the next due card whether it is still the latest.
+    pub wake_ticket: u64,
 }
 
 /// What the learner has done with the current card so far.
@@ -85,7 +88,7 @@ impl Attempt {
 
 impl StudyState {
     pub fn new(mode: Mode, cx: &mut App) -> Self {
-        StudyState { focus: cx.focus_handle(), mode, card: None, counts: Counts::default(), reviewed_today: 0, attempt: Attempt::default(), scheduler: Scheduler::default(), write_round: 0, skipped: Vec::new() }
+        StudyState { focus: cx.focus_handle(), mode, card: None, counts: Counts::default(), reviewed_today: 0, attempt: Attempt::default(), scheduler: Scheduler::default(), write_round: 0, skipped: Vec::new(), extra_new: 0, wake_ticket: 0 }
     }
 
     /// Scores are open from the start in Lezen, and once the text is shown in Luisteren.
@@ -99,6 +102,27 @@ impl StudyState {
     }
 }
 
+/// What is left when no card is waiting now.
+struct Left {
+    deck: usize,
+    drafts: usize,
+    reviewed: usize,
+    /// When the next card is due, in words.
+    next_due: Option<String>,
+    skipped: usize,
+    /// New cards held back by the daily limit.
+    new_later: usize,
+}
+
+/// A way on from the rest screen.
+enum RestAction {
+    Go(Screen),
+    /// Practise the cards skipped this session.
+    Skipped(usize),
+    /// Allow this many more new cards today.
+    MoreNew(usize),
+}
+
 /// What Oefenen shows when no card is waiting, and where its buttons lead.
 struct Rest {
     icon: Icon,
@@ -106,57 +130,99 @@ struct Rest {
     detail: &'static str,
     /// What was done and what comes next: an icon, a value and what it counts.
     stats: Vec<(Icon, String, &'static str)>,
-    actions: Vec<Screen>,
+    actions: Vec<RestAction>,
 }
 
 impl Rest {
-    fn new(deck_size: usize, drafts: usize, reviewed: usize, next_due: Option<String>) -> Rest {
-        let to_drafts = (drafts > 0).then_some(Screen::Drafts).into_iter().collect();
-        match (deck_size, drafts) {
+    fn new(left: Left, per_day: usize) -> Rest {
+        let to_drafts = || (left.drafts > 0).then_some(RestAction::Go(Screen::Drafts));
+        match (left.deck, left.drafts) {
             (0, 0) => Rest {
                 icon: icons::deck(),
                 title: "Je stapel is nog leeg",
                 detail: "Begin een gesprek of plak er een.",
                 stats: Vec::new(),
-                actions: vec![Screen::Talk, Screen::Add],
+                actions: vec![RestAction::Go(Screen::Talk), RestAction::Go(Screen::Add)],
             },
-            (0, _) => Rest { icon: icons::drafts(), title: "Controleer eerst je concepten", detail: "", stats: Vec::new(), actions: to_drafts },
+            (0, _) => Rest { icon: icons::drafts(), title: "Controleer eerst je concepten", detail: "", stats: Vec::new(), actions: to_drafts().into_iter().collect() },
             _ => {
                 let stats = [
-                    (reviewed > 0).then(|| (icons::check(), reviewed.to_string(), "Vandaag geoefend")),
-                    next_due.map(|when| (icons::due(), when, "Volgende kaart")),
-                    (drafts > 0).then(|| (icons::drafts(), drafts.to_string(), "Concepten om te controleren")),
+                    (left.reviewed > 0).then(|| (icons::check(), left.reviewed.to_string(), "Vandaag geoefend")),
+                    left.next_due.map(|when| (icons::due(), when, "Volgende kaart")),
+                    (left.skipped > 0).then(|| (icons::skip(), left.skipped.to_string(), "Overgeslagen")),
+                    (left.new_later > 0).then(|| (icons::new(), left.new_later.to_string(), "Nieuwe kaarten voor een volgende dag")),
+                    (left.drafts > 0).then(|| (icons::drafts(), left.drafts.to_string(), "Concepten om te controleren")),
                 ];
-                Rest { icon: icons::done(), title: "Klaar voor nu", detail: "", stats: stats.into_iter().flatten().collect(), actions: to_drafts }
+                let actions = [
+                    (left.skipped > 0).then_some(RestAction::Skipped(left.skipped)),
+                    (left.new_later > 0).then_some(RestAction::MoreNew(left.new_later.min(per_day.max(5)))),
+                    to_drafts(),
+                ];
+                Rest {
+                    icon: icons::done(),
+                    title: "Alles gedaan",
+                    detail: "Elke kaart is aan de beurt geweest. Wat over is, komt later terug.",
+                    stats: stats.into_iter().flatten().collect(),
+                    actions: actions.into_iter().flatten().collect(),
+                }
             }
         }
     }
 }
 
 impl FlashcardsApp {
+    /// Today's limit for new cards, with any extra asked for this session.
+    pub fn new_limit(&self) -> u32 {
+        self.settings.new_per_day.saturating_add(self.study.extra_new)
+    }
+
     pub fn load_next_card(&mut self, cx: &mut Context<Self>) {
-        let (now, per_day) = (Self::now(), self.settings.new_per_day);
+        let (now, per_day) = (Self::now(), self.new_limit());
         self.study.counts = self.store.counts(now, per_day).unwrap_or_default();
-        let mut next = self.store.next_card(now, per_day, &self.study.skipped);
-        // Skipped cards come back once nothing else is waiting.
-        if matches!(next, Ok(None)) && !self.study.skipped.is_empty() {
-            self.study.skipped.clear();
-            next = self.store.next_card(now, per_day, &[]);
-        }
-        match next {
-            Ok(card) => self.start_card(card, cx),
+        match self.store.next_card(now, per_day, &self.study.skipped) {
+            Ok(card) => {
+                let rest = card.is_none();
+                self.start_card(card, cx);
+                if rest {
+                    self.wake_when_due(now, cx);
+                }
+            }
             Err(err) => self.error(format!("{err:#}")),
         }
     }
 
-    /// Moves on without saving anything about this card; it comes back later.
+    /// With nothing waiting, brings the next card up by itself when it falls
+    /// due, if Oefenen is open then.
+    fn wake_when_due(&mut self, now: chrono::DateTime<chrono::Utc>, cx: &mut Context<Self>) {
+        self.study.wake_ticket += 1;
+        let ticket = self.study.wake_ticket;
+        let Ok(Some(due)) = self.store.next_due_after(now) else { return };
+        let delay = (due - now).to_std().unwrap_or_default().min(std::time::Duration::from_secs(12 * 3600));
+        self.after(delay + std::time::Duration::from_secs(1), cx, move |this, cx| {
+            if this.study.wake_ticket == ticket && this.study.card.is_none() && this.screen == Screen::Study {
+                this.load_next_card(cx);
+            }
+        });
+    }
+
+    /// Moves on without saving anything about this card. It waits until the
+    /// learner asks for the skipped cards on the rest screen.
     fn skip(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.study.card.as_ref().map(|card| card.id).filter(|_| !self.busy_listening()) else { return };
         self.study.skipped.push(id);
         self.load_next_card(cx);
-        if self.study.card.as_ref().is_some_and(|card| card.id == id) {
-            self.info("Er is geen andere kaart om te oefenen.", cx);
-        }
+    }
+
+    /// Brings back the cards skipped this session.
+    fn practise_skipped(&mut self, cx: &mut Context<Self>) {
+        self.study.skipped.clear();
+        self.load_next_card(cx);
+    }
+
+    /// Allows `count` more new cards today, beyond the daily limit.
+    fn more_new(&mut self, count: usize, cx: &mut Context<Self>) {
+        self.study.extra_new = self.study.extra_new.saturating_add(count as u32);
+        self.load_next_card(cx);
     }
 
     fn start_card(&mut self, card: Option<Card>, cx: &mut Context<Self>) {
@@ -529,9 +595,19 @@ impl FlashcardsApp {
     /// No card waiting: why, and what to do next.
     fn render_rest(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Self::now();
-        let next_due = self.store.next_due_after(now).ok().flatten().map(|due| describe_due(due, now));
-        let rest = Rest::new(self.deck.cards.len(), self.drafts.len(), self.study.reviewed_today, next_due);
+        let skipped = &self.study.skipped;
+        let skipped_new = skipped.iter().filter(|id| self.store.card(**id).ok().flatten().is_some_and(|card| card.is_new())).count();
+        let left = Left {
+            deck: self.deck.cards.len(),
+            drafts: self.drafts.len(),
+            reviewed: self.study.reviewed_today,
+            next_due: self.store.next_due_after(now).ok().flatten().map(|due| describe_due(due, now)),
+            skipped: skipped.len(),
+            new_later: self.store.unstudied().unwrap_or_default().saturating_sub(skipped_new),
+        };
+        let rest = Rest::new(left, self.settings.new_per_day as usize);
         let stats: Vec<_> = rest.stats.into_iter().enumerate().map(|(i, (icon, value, tip))| stat(("rest-stat", i as u64), icon, value, tip, cx)).collect();
+        let buttons: Vec<Button> = rest.actions.into_iter().enumerate().map(|(i, action)| self.rest_button(i == 0, action, cx)).collect();
         v_flex()
             .flex_1()
             .items_center()
@@ -546,7 +622,30 @@ impl FlashcardsApp {
                     .items_center()
                     .child(empty_state(rest.icon, rest.title, rest.detail, cx))
                     .when(!stats.is_empty(), |d| d.child(h_flex().flex_wrap().justify_center().gap_5().children(stats)))
-                    .child(h_flex().gap_2().children(go_buttons(rest.actions, cx))),
+                    .child(h_flex().flex_wrap().justify_center().gap_2().children(buttons)),
             )
+    }
+
+    /// One way on from the rest screen; the first is the main one.
+    fn rest_button(&self, main: bool, action: RestAction, cx: &mut Context<Self>) -> Button {
+        let button = match action {
+            RestAction::Go(screen) => Button::new(SharedString::from(format!("go-{}", screen.label())))
+                .icon(screen.icon())
+                .label(screen.label())
+                .on_click(cx.listener(move |this, _, window, cx| this.show(screen, window, cx))),
+            RestAction::Skipped(count) => Button::new("rest-skipped")
+                .icon(icons::skip())
+                .label(format!("Overgeslagen oefenen ({count})"))
+                .on_click(self.study_click(Self::practise_skipped, cx)),
+            RestAction::MoreNew(count) => Button::new("rest-more-new")
+                .icon(icons::new())
+                .label(format!("{count} nieuwe erbij"))
+                .tooltip("Meer nieuwe kaarten dan de daglimiet, alleen vandaag")
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.more_new(count, cx);
+                    this.study.focus.focus(window, cx);
+                })),
+        };
+        if main { button.primary() } else { button.outline() }
     }
 }

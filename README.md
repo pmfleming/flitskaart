@@ -33,8 +33,8 @@ The two tests:
   speaking; a fixed letter doesn't count as right. Writing it again doesn't
   change the grade.
 - **Overslaan** (`S`) – moves on without saving anything about the card: no
-  score, no change to when it comes back. A skipped card returns once nothing
-  else is waiting in this session.
+  score, no change to when it comes back. Skipped cards wait until you ask for
+  them on the **Alles gedaan** card.
 
 The helpers, top right in the card (they never decide the review):
 
@@ -82,7 +82,15 @@ the text hidden; there is no reading test, so scores count in full unless you
 open the meaning. **Schrijf** there is a dictation: write what you heard).
 
 Scheduling is FSRS, the algorithm modern Anki uses. New cards are limited per
-day (10 by default, set in Instellingen).
+day (10 by default, set in Instellingen). Order: due reviews first, longest due
+first; then new cards in random order, so cards from one conversation are
+spread out. No card is shown before it is due, so a session ends: once every
+card has had its turn, only cards scheduled for later are left and Oefenen shows
+**Alles gedaan**, with when the next card is due ("over 4 min"), how many you
+skipped and how many new cards the daily limit held back. Its buttons bring the
+skipped cards back, or allow more new cards today. A card in its first minutes
+(after Weet ik niet or Moeilijk) pops back up by itself when it falls due, if
+Oefenen is open.
 
 ## Gesprek
 

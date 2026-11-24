@@ -1,7 +1,7 @@
 //! The deck, stored in one local Turso database file.
 
 use anyhow::{Context as _, Result, anyhow};
-use chrono::{DateTime, Duration, Local, NaiveTime, SecondsFormat, TimeZone, Utc};
+use chrono::{DateTime, Local, NaiveTime, SecondsFormat, TimeZone, Utc};
 use turso::{Connection, Value};
 
 use crate::model::{Card, CardId, Grade, NewCard, Status, normalize};
@@ -382,8 +382,10 @@ impl Store {
         })
     }
 
-    /// The next card to study: due reviews first, then new cards up to the daily
-    /// limit, then cards from earlier in the session that come back within 20 minutes.
+    /// The next card to study: due reviews first (longest due first), then new
+    /// cards up to the daily limit, picked at random so cards from one
+    /// conversation are spread out. Nothing is shown before it is due, so once
+    /// every card has had its turn, only cards scheduled for later are left.
     /// The `skipped` cards are left out.
     pub fn next_card(&self, now: DateTime<Utc>, new_per_day: u32, skipped: &[CardId]) -> Result<Option<Card>> {
         let ids: Vec<String> = skipped.iter().map(ToString::to_string).collect();
@@ -396,16 +398,16 @@ impl Store {
             return Ok(Some(card));
         }
         if self.new_allowed(now, new_per_day)? > 0 {
-            let new = self.cards_where(&format!("status = 'active' AND reviews = 0{not_skipped} ORDER BY activated_at, id LIMIT 1"), vec![])?;
-            if let Some(card) = new.into_iter().next() {
-                return Ok(Some(card));
-            }
+            let new = self.cards_where(&format!("status = 'active' AND reviews = 0{not_skipped} ORDER BY random() LIMIT 1"), vec![])?;
+            return Ok(new.into_iter().next());
         }
-        let soon = self.cards_where(
-            &format!("status = 'active' AND reviews > 0 AND due <= ?1{not_skipped} ORDER BY due, id LIMIT 1"),
-            vec![stamp(now + Duration::minutes(20)).into()],
-        )?;
-        Ok(soon.into_iter().next())
+        Ok(None)
+    }
+
+    /// How many active cards have never been studied, whatever the daily limit.
+    pub fn unstudied(&self) -> Result<usize> {
+        let rows = self.rows("SELECT COUNT(*) FROM cards WHERE status = 'active' AND reviews = 0", vec![])?;
+        Ok(integer(&rows[0][0]) as usize)
     }
 
     /// Saves a review and reschedules the card. [`count`] decides how the review counts.
@@ -597,11 +599,12 @@ fn start_of_local_day(now: DateTime<Utc>) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Appearance, CardId, DateTime, Duration, Gender, Grade, INPUT_BOOSTS, Mode, NewCard, Paths, Review, SCHEMA, Scheduler,
+        Appearance, CardId, DateTime, Gender, Grade, INPUT_BOOSTS, Mode, NewCard, Paths, Review, SCHEMA, Scheduler,
         Settings, Store, Utc, Value, boost_label, integer, snap_input_boost, text,
     };
     use crate::speech::{Assessment, assess};
     use crate::writing::Written;
+    use chrono::Duration;
 
     fn store() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
@@ -638,7 +641,9 @@ mod tests {
         assert_eq!((card.reviews, card.misses, card.peeks), (1, 1, 1));
         assert!(card.due.unwrap() > now);
         assert_eq!(store.counts(now, 10).unwrap().due, 0, "comes back later in the session, not now");
-        assert_eq!(store.next_card(now, 10, &[]).unwrap().map(|c| c.id), Some(id), "learn-ahead within 20 minutes");
+        assert!(store.next_card(now, 10, &[]).unwrap().is_none(), "not before it is due, so the session can end");
+        assert_eq!(store.next_due_after(now).unwrap(), card.due);
+        assert_eq!(store.next_card(card.due.unwrap(), 10, &[]).unwrap().map(|c| c.id), Some(id), "back once due");
         let card = store.record_review(id, read(Grade::Easy, None, false), &scheduler, card.due.unwrap()).unwrap();
         assert!(card.due.unwrap() - now > Duration::hours(12));
         assert!(store.next_card(now + Duration::hours(1), 10, &[]).unwrap().is_none());
@@ -659,16 +664,19 @@ mod tests {
     }
 
     #[test]
-    fn skipped_cards_are_left_out_and_unchanged() {
+    fn new_cards_come_shuffled_and_skipped_cards_are_left_out() {
         let (_dir, store) = store();
         let now = Utc::now();
-        let ids = deck(&store, &["een", "twee"], now);
-        let next = |skipped: &[CardId]| store.next_card(now, 10, skipped).unwrap().map(|card| card.id);
-        assert_eq!(next(&[]), Some(ids[0]));
-        assert_eq!(next(&ids[..1]), Some(ids[1]));
-        assert_eq!(next(&ids), None);
+        let ids = deck(&store, &["een", "twee", "drie", "vier", "vijf", "zes"], now);
+        let next = |skipped: &[CardId]| store.next_card(now, 10, skipped).unwrap().map(|card| card.id).unwrap_or(0);
+        let picks: std::collections::HashSet<CardId> = (0..40).map(|_| next(&[])).collect();
+        assert!(picks.len() > 1, "not always the first one saved");
+        assert!(picks.iter().all(|id| ids.contains(id)));
+        let first = next(&[]);
+        assert_ne!(next(&[first]), first);
+        assert_eq!(next(&ids), 0, "all skipped");
         let card = store.card(ids[0]).unwrap().unwrap();
-        assert_eq!((card.reviews, card.is_new()), (0, true), "skipping saves nothing");
+        assert_eq!((card.reviews, card.is_new(), store.unstudied().unwrap()), (0, true, 6), "skipping saves nothing");
     }
 
     #[test]

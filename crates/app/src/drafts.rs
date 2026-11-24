@@ -134,7 +134,7 @@ impl FlashcardsApp {
         if self.study.card.is_none() {
             self.load_next_card(cx);
         } else {
-            self.study.counts = self.store.counts(Self::now(), self.settings.new_per_day).unwrap_or_default();
+            self.study.counts = self.store.counts(Self::now(), self.new_limit()).unwrap_or_default();
         }
         cx.notify();
     }

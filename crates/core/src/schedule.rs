@@ -127,11 +127,15 @@ pub fn describe(gap: Duration) -> String {
     plural((days + 182) / 365, "jaar", "jaar")
 }
 
-/// "vandaag", "morgen", "over 5 dagen", for the deck list.
+/// "over 7 min", "vandaag", "morgen", "over 5 dagen", for the deck list and
+/// the rest screen.
 pub fn describe_due(due: DateTime<Utc>, now: DateTime<Utc>) -> String {
     let gap = due - now;
     if gap <= Duration::zero() {
         return "nu".into();
+    }
+    if gap < Duration::hours(1) {
+        return format!("over {}", describe(gap));
     }
     if gap < Duration::hours(20) {
         return "vandaag".into();
@@ -227,7 +231,7 @@ mod tests {
         for (gap, text) in gaps {
             assert_eq!(describe(gap), text);
         }
-        let dues = [(Duration::zero(), "nu"), (Duration::hours(5), "vandaag"), (Duration::hours(30), "morgen"),
+        let dues = [(Duration::zero(), "nu"), (Duration::minutes(7), "over 7 min"), (Duration::hours(5), "vandaag"), (Duration::hours(30), "morgen"),
             (Duration::days(5), "over 5 dagen")];
         for (gap, text) in dues {
             assert_eq!(describe_due(now + gap, now), text);

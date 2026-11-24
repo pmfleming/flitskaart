@@ -92,7 +92,7 @@ fn a_deck_from_paste_to_practice(cx: &mut TestAppContext) {
     // Lezen: write the card with one wrong key, fixed with Backspace; the
     // writing then grades the review. Every key goes to the writing meanwhile.
     app.show(cx, Screen::Study);
-    // Skipping moves on and saves nothing; the card comes back when the rest is done.
+    // Skipping moves on and saves nothing; the rest screen offers it again.
     let skipped = app.read(cx, |app| app.study.card.as_ref().unwrap().id);
     app.click(cx, ["skip".into()]);
     assert!(app.read(cx, |app| app.study.card.as_ref().is_some_and(|card| card.id != skipped) && app.study.reviewed_today == 0));
@@ -112,14 +112,24 @@ fn a_deck_from_paste_to_practice(cx: &mut TestAppContext) {
     // The meaning counts against the review; then Luisteren, veiled until Space.
     app.press(cx, "v h 3");
     assert!(app.read(cx, |app| app.study.reviewed_today == 1 && app.notice.as_ref().is_some_and(|n| n.is_error)), "no voice installed");
+    // Everything has had its turn: the scored card waits its 10 minutes, so
+    // the session is done, with the skipped card on offer.
+    assert!(app.read(cx, |app| app.study.card.is_none()), "all done, nothing shown early");
+    app.click(cx, ["rest-skipped".into()]);
+    assert_eq!(app.read(cx, |app| app.study.card.as_ref().map(|card| card.id)), Some(skipped));
     app.click(cx, ["mode-Luisteren".into()]);
     app.press(cx, "4");
     assert_eq!(app.read(cx, |app| (app.settings.mode, app.study.reviewed_today)), (Mode::Listen, 1), "no score before the text shows");
-    app.press(cx, "space 1 b");
-    assert_eq!(app.read(cx, |app| (app.study.reviewed_today, app.screen, app.deck.editing.is_some())), (2, Screen::Deck, true));
+    app.press(cx, "space b");
+    assert_eq!(app.read(cx, |app| (app.screen, app.deck.editing.is_some())), (Screen::Deck, true), "B edits the card");
+    app.click(cx, ["edit-save".into()]);
+    app.show(cx, Screen::Study);
+    app.press(cx, "1");
+    assert!(app.read(cx, |app| app.study.reviewed_today == 2 && app.study.card.is_none()), "every card had its turn: all done");
 
+    app.show(cx, Screen::Deck);
     let first = app.read(cx, |app| app.deck.cards[0].id as u64);
-    app.click(cx, ["edit-save".into(), row("pause", first), row("edit", first), "edit-cancel".into()]);
+    app.click(cx, [row("pause", first), row("edit", first), "edit-cancel".into()]);
     app.click(cx, [row("delete", first), row("delete-no", first), row("delete", first), row("delete-yes", first)]);
     app.act(cx, |app, _, _| {
         app.deck.query = "geen treffer".into();
