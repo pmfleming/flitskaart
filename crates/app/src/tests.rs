@@ -175,11 +175,15 @@ fn settings_and_the_microphone_test(cx: &mut TestAppContext) {
 
 /// Stands in for Claude Code: always corrects "heb … gegaan", notes "market" as
 /// English and "dit weekend" as not understood, and asks what was bought;
-/// asked for cards, makes one of the correction.
+/// asked for cards, makes one of the correction. Researching a topic finds three
+/// angles; any other search finds one known source and one new one.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 request=$(cat)
 case "$*" in
-  *'"sources"'*) echo '{"is_error":false,"modelUsage":{"sonnet":{"webSearchRequests":1}},"structured_output":{"sources":[{"title":"De markt","url":"https://example.org/markt","date":"2026-11-24","facts":"Er is een markt op zaterdag."}]}}' ;;
+  *'"sources"'*) case "$request" in
+  *'"options":true'*) echo '{"is_error":false,"modelUsage":{"sonnet":{"webSearchRequests":1}},"structured_output":{"sources":[{"title":"De markt","url":"https://example.org/markt","date":"2026-11-24","facts":"Er is een markt op zaterdag."},{"title":"Fietsen","url":"https://example.org/fiets","date":"","facts":"Veel mensen fietsen in het weekend."},{"title":"Uitslapen","url":"https://example.org/slapen","date":"2026-10-01","facts":"Uitslapen is populair."}]}}' ;;
+  *) echo '{"is_error":false,"modelUsage":{"sonnet":{"webSearchRequests":1}},"structured_output":{"sources":[{"title":"Fietsen","url":"https://example.org/fiets","date":"","facts":"Al bekend."},{"title":"Nieuwe fietspaden","url":"https://example.org/nieuw","date":"2026-11-20","facts":"Er komen nieuwe fietspaden."}]}}' ;;
+  esac ;;
   *'"cards"'*) case "$request" in
   *'Leervraag: Beleefd om hulp vragen'*) echo '{"is_error":false,"structured_output":{"recap":"Je vroeg hoe je beleefd om hulp vraagt.","cards":[{"dutch":"Zou u mij kunnen helpen?","english":"Could you help me?","note":"Dit is beleefd.","tag":"hulp"}]}}' ;;
   *) echo '{"is_error":false,"modelUsage":{"claude-sonnet-5-5":{"inputTokens":100,"outputTokens":40,"cacheReadInputTokens":10,"costUSD":0.002}},"structured_output":{"cards":[{"dutch":"Ik ben naar de markt gegaan.","english":"I went to the market.","note":"Bij gaan hoort zijn.","tag":"grammatica"}]}}' ;;
@@ -211,8 +215,19 @@ fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
 
     app.act(cx, |app, _, _| app.llm.program = program.clone());
     app.click(cx, ["topic-Het weekend".into()]);
+    assert_eq!(app.read(cx, |app| (app.talk.options.len(), app.talk.current.as_ref().map(|c| c.lines.len()))), (3, Some(0)), "three angles to choose from");
+    app.click(cx, ["talk-more-options".into()]);
+    assert_eq!(app.read(cx, |app| app.talk.options.len()), 3, "nothing new found, so the same angles stay");
+    app.click(cx, [row("talk-option", 1)]);
     assert_eq!(app.read(cx, |app| app.talk.current.as_ref().map(|c| (c.topic.clone(), c.lines.len()))), Some(("Het weekend".into(), 1)));
-    assert!(app.read(cx, |app| app.talk.current.as_ref().is_some_and(|c| c.sources.len() == 1 && c.partner.as_ref().is_some_and(|p| p.name == "Noor"))));
+    assert!(app.read(cx, |app| app.talk.options.is_empty() && app.talk.current.as_ref().is_some_and(|c| {
+        c.angle.as_deref() == Some("Fietsen") && c.sources.len() == 1 && c.partner.as_ref().is_some_and(|p| p.name == "Noor")
+    })));
+    // Bijwerken adds only what the partner didn't know yet.
+    app.click(cx, ["talk-refresh".into()]);
+    let urls = app.read(cx, |app| app.talk.current.as_ref().unwrap().sources.iter().map(|s| s.url.clone()).collect::<Vec<_>>());
+    assert_eq!(urls, ["https://example.org/fiets", "https://example.org/nieuw"]);
+    assert!(app.read(cx, |app| !app.talk.refreshing && app.notice.as_ref().is_some_and(|n| n.text.contains("1 nieuwe bron"))));
     app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Ik heb naar de market gegaan", window, cx)));
     app.click(cx, ["talk-send".into()]);
     let corrected = app.read(cx, |app| app.talk.current.as_ref().unwrap().lines[1].corrected.clone());
@@ -239,7 +254,7 @@ fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
     app.show(cx, Screen::Talk);
 
     app.show(cx, Screen::Talk);
-    app.click(cx, ["topic-Het weekend".into()]);
+    app.click(cx, ["topic-Het weekend".into(), row("talk-option", 0)]);
     app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Hoe vraag ik beleefd om hulp?", window, cx)));
     app.click(cx, ["talk-send".into()]);
     assert!(app.read(cx, |app| app.talk.current.as_ref().unwrap().transcript().contains("Leervraag: Beleefd om hulp vragen")));
@@ -250,7 +265,7 @@ fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
 
     app.show(cx, Screen::Talk);
     app.click(cx, ["talk-recap".into()]);
-    app.click(cx, ["topic-Het weekend".into()]);
+    app.click(cx, ["topic-Het weekend".into(), row("talk-option", 2)]);
     app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Hoe vraag ik beleefd om hulp?", window, cx)));
     app.click(cx, ["talk-send".into()]);
     app.act(cx, |app, _, _| app.llm.program = missing);

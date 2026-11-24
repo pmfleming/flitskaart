@@ -96,11 +96,18 @@ Oefenen is open.
 ## Gesprek
 
 Practise speaking about a topic. Pick one of the topic tiles, type your own, or
-leave it open. For a chosen topic, Claude looks up a little background and shows
-the sources above the conversation. A fictional partner opens with a point of
-view and helps you say what you mean in Dutch. The Dutch voice reads the partner’s
-lines out loud. If research finds no sources, you can still talk or retry the
-lookup before replying.
+leave it open. For a chosen topic, Claude looks up a little background and
+offers three angles it found, each with its date, a fact or two and a link to
+the source. Pick one to talk about, or ask for **Andere invalshoeken**. A
+fictional partner opens with a point of view on that angle and helps you say
+what you mean in Dutch. The Dutch voice reads the partner’s lines out loud. If
+research finds only one source the conversation opens on it. If it finds none,
+you can still talk or retry the lookup before replying.
+
+The sources stay above the conversation. **Bijwerken** looks up newer
+information about what you are talking about now, leaving out the sources
+already there. The partner uses the new sources from the next line on. It works
+in an open conversation too.
 
 Answer each line by typing (`Enter` or the send button) or with the
 speech-bubble button. Recording stops by itself when you finish, and Whisper

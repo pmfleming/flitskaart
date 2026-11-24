@@ -4,7 +4,7 @@
 use std::io::BufRead as _;
 
 use dutch_flashcards_core::llm::Llm;
-use dutch_flashcards_core::conversation::{Conversation, Said, continue_turn, look_up};
+use dutch_flashcards_core::conversation::{Conversation, Said, Search, continue_turn, look_up};
 use dutch_flashcards_core::drafting;
 
 fn main() -> anyhow::Result<()> {
@@ -13,7 +13,7 @@ fn main() -> anyhow::Result<()> {
     let mut conversation = Conversation::new(&args.next().unwrap_or_default());
     let make_cards = args.any(|arg| arg == "--cards");
     if !conversation.topic.is_empty() {
-        match look_up(&llm, &conversation.topic) {
+        match look_up(&llm, &Search::about(&conversation.topic)) {
             Ok(sources) => conversation.add_sources(sources),
             Err(err) => eprintln!("Geen bronnen: {err:#}"),
         }
