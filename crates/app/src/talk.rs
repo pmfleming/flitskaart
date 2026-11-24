@@ -144,7 +144,7 @@ impl FlashcardsApp {
         self.stop_audio();
         self.talk.show_sources = false;
         self.talk.ticket += 1;
-        let (ticket, claude) = (self.talk.ticket, self.claude.clone());
+        let (ticket, llm) = (self.talk.ticket, self.llm.clone());
         let current = Conversation::new(topic);
         let topic = current.topic.clone();
         self.talk.current = Some(current);
@@ -153,7 +153,7 @@ impl FlashcardsApp {
             return self.ask_partner(None, cx);
         }
         self.talk.researching = true;
-        self.in_background(cx, move || conversation::look_up(&claude, &topic), move |this, sources, cx| {
+        self.in_background(cx, move || conversation::look_up(&llm, &topic), move |this, sources, cx| {
             if this.talk.ticket != ticket {
                 return;
             }
@@ -192,10 +192,10 @@ impl FlashcardsApp {
     fn ask_partner(&mut self, said: Option<Said>, cx: &mut Context<Self>) {
         let Some(current) = &self.talk.current else { return };
         let request = current.request(said.as_ref());
-        let (claude, ticket) = (self.claude.clone(), self.talk.ticket);
+        let (llm, ticket) = (self.llm.clone(), self.talk.ticket);
         (self.talk.pending, self.talk.thinking, self.talk.error) = (said, true, None);
         self.talk.scroll.scroll_to_bottom();
-        let job = move || conversation::continue_turn(&claude, &request);
+        let job = move || conversation::continue_turn(&llm, &request);
         self.in_background(cx, job, move |this, reply, cx| {
             if this.talk.ticket == ticket {
                 this.talk.thinking = false;
@@ -359,9 +359,9 @@ impl FlashcardsApp {
         let Some(job) = self.talk.card_job.clone().filter(|_| !self.talk.making_cards) else { return };
         self.talk.making_cards = true;
         self.talk.error = None;
-        let claude = self.claude.clone();
+        let llm = self.llm.clone();
         let task = cx.background_executor().spawn(async move {
-            drafting::review_conversation(&claude, &job.transcript, conversation::CARD_STEER, job.limit)
+            drafting::review_conversation(&llm, &job.transcript, conversation::CARD_STEER, job.limit)
         });
         cx.spawn(async move |this, cx| {
             let cards = task.await;

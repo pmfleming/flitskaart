@@ -1,6 +1,7 @@
 //! The whole app in a headless window: real clicks and keys through each screen.
 
 use dutch_flashcards_core::Store;
+use dutch_flashcards_core::llm::{Cli, Effort, ModelChoice};
 use dutch_flashcards_core::paths::Paths;
 use dutch_flashcards_core::speech::write_wav_16k;
 use dutch_flashcards_core::store::{Appearance, Mode};
@@ -146,7 +147,14 @@ fn settings_and_the_microphone_test(cx: &mut TestAppContext) {
     let wav = app.dir.path().join("test.wav");
     let speech: Vec<f32> = (0..32_000).map(|i| if i > 4_000 { 0.3 * (i as f32 * 0.17).sin() } else { 0.0 }).collect();
     write_wav_16k(&wav, &speech, 16_000, 1).unwrap();
-    app.act(cx, |app, _, _| app.fake_recording = Some(wav));
+    // The logged-in tools as Instellingen would find them, so none are run here.
+    let model = |cli, id: &str, efforts: Vec<Effort>, default_effort| ModelChoice { cli, id: id.into(), name: id.into(), efforts, default_effort };
+    let choices = vec![
+        model(Cli::ClaudeCode, "opus", Effort::ALL.to_vec(), Effort::Medium),
+        model(Cli::ClaudeCode, "sonnet", Effort::ALL.to_vec(), Effort::Medium),
+        model(Cli::Antigravity, "gemini-x", vec![Effort::Low, Effort::High], Effort::Low),
+    ];
+    app.act(cx, |app, _, _| (app.fake_recording, app.llm_choices) = (Some(wav), Some(choices)));
     app.show(cx, Screen::Settings);
     app.click(cx, ["vrouw".into(), "licht".into(), "more".into(), "mic-test".into()]);
     let settings = app.read(cx, |app| app.settings.clone());
@@ -154,6 +162,15 @@ fn settings_and_the_microphone_test(cx: &mut TestAppContext) {
     assert!(app.dir.path().join("recordings/microfoontest.wav").exists(), "the stand-in recording is saved for playback");
     app.click(cx, ["fewer".into()]);
     assert_eq!(app.read(cx, |app| app.store.settings().unwrap().new_per_day), 10, "saved as it changes");
+    // The tool, model and effort go to every answer, and are saved.
+    app.click(cx, ["model-claude-opus".into(), "effort-high".into()]);
+    assert_eq!(app.read(cx, |app| (app.llm.cli, app.llm.model.clone(), app.llm.effort)), (Cli::ClaudeCode, "opus".to_string(), Effort::High));
+    // Antigravity names the effort in the model.
+    app.click(cx, ["llm-tab-agy".into(), "model-agy-gemini-x".into()]);
+    assert_eq!(app.read(cx, |app| (app.llm.cli, app.llm.model.clone())), (Cli::Antigravity, "gemini-x-high".to_string()));
+    app.click(cx, ["effort-low".into()]);
+    let saved = app.read(cx, |app| app.store.settings().unwrap());
+    assert_eq!((saved.cli, saved.model.as_str(), saved.effort), (Cli::Antigravity, "gemini-x-low", Effort::Low));
 }
 
 /// Stands in for Claude Code: always corrects "heb … gegaan", notes "market" as
@@ -165,7 +182,7 @@ case "$*" in
   *'"sources"'*) echo '{"is_error":false,"modelUsage":{"sonnet":{"webSearchRequests":1}},"structured_output":{"sources":[{"title":"De markt","url":"https://example.org/markt","date":"2026-11-24","facts":"Er is een markt op zaterdag."}]}}' ;;
   *'"cards"'*) case "$request" in
   *'Leervraag: Beleefd om hulp vragen'*) echo '{"is_error":false,"structured_output":{"recap":"Je vroeg hoe je beleefd om hulp vraagt.","cards":[{"dutch":"Zou u mij kunnen helpen?","english":"Could you help me?","note":"Dit is beleefd.","tag":"hulp"}]}}' ;;
-  *) echo '{"is_error":false,"structured_output":{"cards":[{"dutch":"Ik ben naar de markt gegaan.","english":"I went to the market.","note":"Bij gaan hoort zijn.","tag":"grammatica"}]}}' ;;
+  *) echo '{"is_error":false,"modelUsage":{"claude-sonnet-5-5":{"inputTokens":100,"outputTokens":40,"cacheReadInputTokens":10,"costUSD":0.002}},"structured_output":{"cards":[{"dutch":"Ik ben naar de markt gegaan.","english":"I went to the market.","note":"Bij gaan hoort zijn.","tag":"grammatica"}]}}' ;;
   esac ;;
   *) case "$request" in
   *'"opening":true'*) echo '{"is_error":false,"structured_output":{"corrected":"","explanation":"","reply":"Ik ga graag naar de markt. Wat heb je dit weekend gedaan?","reply_english":"I like going to the market.","partner":{"name":"Noor","role":"marktliefhebber","opinion":"Ik ga graag naar de markt.","reason":"Ik winkel het liefst buiten."}}}' ;;
@@ -187,12 +204,12 @@ fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
     std::fs::write(&program, FAKE_CLAUDE).unwrap();
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     let missing = app.dir.path().join("geen-claude");
-    app.act(cx, |app, _, _| app.claude.program = missing.clone());
+    app.act(cx, |app, _, _| app.llm.program = missing.clone());
     app.show(cx, Screen::Talk);
     app.click(cx, ["topic-Het weekend".into()]);
     assert!(app.read(cx, |app| app.talk.current.is_none() && app.talk.error.is_some()), "back to the topics when Claude can't start");
 
-    app.act(cx, |app, _, _| app.claude.program = program.clone());
+    app.act(cx, |app, _, _| app.llm.program = program.clone());
     app.click(cx, ["topic-Het weekend".into()]);
     assert_eq!(app.read(cx, |app| app.talk.current.as_ref().map(|c| (c.topic.clone(), c.lines.len()))), Some(("Het weekend".into(), 1)));
     assert!(app.read(cx, |app| app.talk.current.as_ref().is_some_and(|c| c.sources.len() == 1 && c.partner.as_ref().is_some_and(|p| p.name == "Noor"))));
@@ -212,6 +229,14 @@ fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
     assert_eq!(app.read(cx, |app| (app.screen, app.drafts.len(), app.talk.current.is_none())), (Screen::Drafts, 1, true));
     let source = app.read(cx, |app| app.drafts[0].snippet_id.and_then(|id| app.store.snippet(id).unwrap()).unwrap());
     assert!(source.starts_with("Gesprek over: Het weekend") && source.contains("In het Engels gezegd: market = de markt"), "{source}");
+    // The answer's token use is kept with the deck, for Instellingen.
+    let used = app.read(cx, |app| app.store.usage_summary(chrono::Utc::now(), 7).unwrap());
+    assert_eq!((used.total.calls, used.total.tokens(), used.by_model[0].0.as_str()), (1, 150, "claude-sonnet-5-5"));
+    app.act(cx, |app, _, _| app.llm_choices = Some(Vec::new()));
+    app.show(cx, Screen::Settings);
+    app.click(cx, ["usage-per-day".into()]);
+    assert!(app.read(cx, |app| app.usage_by_day), "the breakdown turns to days");
+    app.show(cx, Screen::Talk);
 
     app.show(cx, Screen::Talk);
     app.click(cx, ["topic-Het weekend".into()]);
@@ -228,10 +253,10 @@ fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
     app.click(cx, ["topic-Het weekend".into()]);
     app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Hoe vraag ik beleefd om hulp?", window, cx)));
     app.click(cx, ["talk-send".into()]);
-    app.act(cx, |app, _, _| app.claude.program = missing);
+    app.act(cx, |app, _, _| app.llm.program = missing);
     app.click(cx, ["talk-finish".into()]);
     assert!(app.read(cx, |app| app.talk.current.is_none() && app.talk.error.is_some() && app.drafts.len() == 2));
-    app.act(cx, |app, _, _| app.claude.program = program);
+    app.act(cx, |app, _, _| app.llm.program = program);
     app.click(cx, ["talk-retry-cards".into()]);
     assert_eq!(app.read(cx, |app| app.drafts.len()), 3);
 }

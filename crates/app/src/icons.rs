@@ -138,6 +138,12 @@ icons! {
     dark,
     /// Nieuwe kaarten per dag: a calendar day with a plus.
     per_day,
+    /// Claude, Model: a chip.
+    model,
+    /// Denkwerk: a gauge.
+    effort,
+    /// Verbruik: a stack of tokens.
+    tokens,
     /// Gegevens: a folder.
     folder,
     /// Minder: a minus.

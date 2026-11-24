@@ -2,7 +2,7 @@
 //! storage, the Dutch voice, practice conversations and turning conversations
 //! into cards.
 
-pub mod claude;
+pub mod llm;
 pub mod conversation;
 pub mod drafting;
 pub mod inputs;
@@ -11,6 +11,7 @@ pub mod paths;
 pub mod schedule;
 pub mod speech;
 pub mod store;
+pub mod usage;
 pub mod voice;
 pub mod writing;
 

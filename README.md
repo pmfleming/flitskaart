@@ -1,7 +1,8 @@
 # Flitskaart
 
 A Dutch-only flashcard app for this laptop. Paste a piece of a conversation you
-had with Claude, ChatGPT or Gemini; Claude Code turns it into draft cards; you
+had with Claude, ChatGPT or Gemini; a language model you are logged in to (Claude
+Code, Codex, Antigravity or Pi) turns it into draft cards; you
 check them; the app brings each card back at growing intervals.
 
 Every card is shown in Dutch. The English is stored but stays hidden until you
@@ -153,6 +154,15 @@ carry the app's own icons, and hovering one shows what it means.
   The app always records from the system's default microphone. **Versterking**
   (0,5×–2,5×, a slider) amplifies every recording, in study and in the test,
   before the app listens to it; samples pushed past full scale are cut off.
+  **Taalmodel** lists the command-line tools you are logged in to on this
+  laptop (Claude Code, Codex, Antigravity for Gemini, Pi), found when
+  Instellingen first opens (the arrow looks again). Pick a tool, one of its
+  models and how much it thinks (**Denkwerk**: Laag to Max, as far as the model
+  offers); conversations and drafting use it from then on. Web research for
+  conversations always goes through Claude Code. **Verbruik** shows every token
+  the app has used: the total, a bar per day for the last 30 days split by
+  model, the split between new input, cache and output, and a table per model
+  or per day.
 
 ## Running it
 
@@ -162,8 +172,10 @@ scripts/fetch-models.sh      # Piper voices + Whisper, ~830 MB, checksummed
 cargo run --release -p dutch-flashcards
 ```
 
-Card drafting and conversations run `claude -p` with your Claude Code login (no
-API key). Each paste is one request and takes 5–15 seconds; each conversation
+Card drafting and conversations run the chosen tool with your own login (no API
+key): `claude -p`, `codex exec`, `agy --print` or `pi -p`, each asked for JSON
+in a fixed shape. Claude Code and Antigravity hold the answer to the shape
+themselves; Codex gets a strict version of it; Pi gets it in its instructions. Each paste is one request and takes 5–15 seconds; each conversation
 turn takes about 3 seconds.
 
 ## Where things live
@@ -185,8 +197,9 @@ wrong, the end of this file says what happened. A crash in native code
 | `DUTCH_FLASHCARDS_DATA` | `$XDG_DATA_HOME/dutch-flashcards` |
 | `DUTCH_FLASHCARDS_VOICES` | `<data>/voices` |
 | `DUTCH_FLASHCARDS_MODELS` | `<data>/models` (Whisper large-v3-turbo) |
-| `DUTCH_FLASHCARDS_MODEL` | `sonnet` (the Claude model for drafting and conversations) |
-| `DUTCH_FLASHCARDS_CLAUDE` / `DUTCH_FLASHCARDS_PIPER` / `DUTCH_FLASHCARDS_WHISPER` | `claude` / `piper` / `whisper-cli` on `PATH` |
+| `DUTCH_FLASHCARDS_MODEL` | `sonnet` (the Claude model for the `draft` and `talk` examples; the app uses Instellingen) |
+| `DUTCH_FLASHCARDS_CLAUDE` / `_CODEX` / `_AGY` / `_PI` | `claude` / `codex` / `agy` / `pi` on `PATH` |
+| `DUTCH_FLASHCARDS_PIPER` / `DUTCH_FLASHCARDS_WHISPER` | `piper` / `whisper-cli` on `PATH` |
 
 ## Voices
 
@@ -211,7 +224,7 @@ words right, while the female voices built from audiobook recordings (MLS) got
   stands in for the microphone, and `wacht` in `--keys` waits for Whisper and
   Claude. On `--screen gesprek`, `--keys "begin wacht spreek wacht"` starts a
   conversation and answers it with the recording. On
-  `--screen instellingen`, `--keys microfoon` runs the microphone test.
+  `--screen instellingen`, `--keys microfoon` runs the microphone test, `taalmodel` and `verbruik` scroll to those sections (after `wacht`, once the tools are found).
 - `scripts/fetch-models.sh` – downloads the voices and the speech recognizer.
 - `crates/core/examples/` – `draft` (try the drafting prompt on a snippet),
   `talk` (try the conversation prompt: one answer per line on stdin) and

@@ -4,6 +4,7 @@ use anyhow::{Context as _, Result, anyhow};
 use chrono::{DateTime, Local, NaiveTime, SecondsFormat, TimeZone, Utc};
 use turso::{Connection, Value};
 
+use crate::llm::{Cli, DEFAULT_MODEL, Effort};
 use crate::model::{Card, CardId, Grade, NewCard, Status, normalize};
 use crate::paths::Paths;
 use crate::schedule::{Scheduler, count, new_schedule};
@@ -49,6 +50,17 @@ CREATE TABLE IF NOT EXISTS reviews (
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    cli TEXT NOT NULL DEFAULT 'claude',
+    model TEXT NOT NULL,
+    effort TEXT NOT NULL DEFAULT '',
+    input INTEGER NOT NULL,
+    cache_read INTEGER NOT NULL,
+    cache_write INTEGER NOT NULL,
+    output INTEGER NOT NULL
 );
 ";
 
@@ -155,6 +167,11 @@ pub struct Settings {
     pub appearance: Appearance,
     /// How much recordings are amplified before they are judged; one of [`INPUT_BOOSTS`].
     pub input_boost: f32,
+    /// The tool that answers in conversations and drafting.
+    pub cli: Cli,
+    /// The model, as that tool knows it.
+    pub model: String,
+    pub effort: Effort,
 }
 
 impl Default for Settings {
@@ -167,6 +184,9 @@ impl Default for Settings {
             mode: Mode::Read,
             appearance: Appearance::System,
             input_boost: 1.0,
+            cli: Cli::default(),
+            model: DEFAULT_MODEL.into(),
+            effort: Effort::default(),
         }
     }
 }
@@ -481,6 +501,9 @@ impl Store {
                 "mode" => settings.mode = Mode::parse(&value),
                 "appearance" => settings.appearance = Appearance::parse(&value).unwrap_or(settings.appearance),
                 "input_boost" => settings.input_boost = value.parse().map(snap_input_boost).unwrap_or(settings.input_boost),
+                "cli" => settings.cli = Cli::parse(&value).unwrap_or(settings.cli),
+                "model" if !value.trim().is_empty() => settings.model = value,
+                "effort" => settings.effort = Effort::parse(&value).unwrap_or(settings.effort),
                 _ => {}
             }
         }
@@ -488,7 +511,7 @@ impl Store {
     }
 
     pub fn save_settings(&self, settings: &Settings) -> Result<()> {
-        let pairs: [(&str, Value); 7] = [
+        let pairs: [(&str, Value); 10] = [
             ("new_per_day", settings.new_per_day.to_string().into()),
             ("gender", settings.gender.as_str().into()),
             ("male_voice", settings.male_voice.as_str().into()),
@@ -496,6 +519,9 @@ impl Store {
             ("mode", settings.mode.as_str().into()),
             ("appearance", settings.appearance.as_str().into()),
             ("input_boost", settings.input_boost.to_string().into()),
+            ("cli", settings.cli.id().into()),
+            ("model", settings.model.as_str().into()),
+            ("effort", settings.effort.as_str().into()),
         ];
         for (key, value) in pairs {
             self.exec(
@@ -513,12 +539,12 @@ impl Store {
         self.rows(&sql, params)?.iter().map(|row| card_from_row(row)).collect()
     }
 
-    fn exec(&self, sql: &str, params: Vec<Value>) -> Result<()> {
+    pub(crate) fn exec(&self, sql: &str, params: Vec<Value>) -> Result<()> {
         pollster::block_on(self.conn.execute(sql, params)).with_context(|| format!("running {sql}"))?;
         Ok(())
     }
 
-    fn rows(&self, sql: &str, params: Vec<Value>) -> Result<Vec<Vec<Value>>> {
+    pub(crate) fn rows(&self, sql: &str, params: Vec<Value>) -> Result<Vec<Vec<Value>>> {
         pollster::block_on(async {
             let mut rows = self.conn.query(sql, params).await.with_context(|| format!("running {sql}"))?;
             let mut out = Vec::new();
@@ -556,7 +582,7 @@ fn real(value: &Value) -> Option<f32> {
     }
 }
 
-fn text(value: &Value) -> String {
+pub(crate) fn text(value: &Value) -> String {
     match value {
         Value::Text(s) => s.clone(),
         Value::Integer(n) => n.to_string(),
@@ -565,7 +591,7 @@ fn text(value: &Value) -> String {
     }
 }
 
-fn integer(value: &Value) -> i64 {
+pub(crate) fn integer(value: &Value) -> i64 {
     match value {
         Value::Integer(n) => *n,
         Value::Real(n) => *n as i64,
@@ -575,11 +601,11 @@ fn integer(value: &Value) -> i64 {
 }
 
 /// Fixed-width UTC timestamps, so text comparison in SQL orders them correctly.
-fn stamp(time: DateTime<Utc>) -> String {
+pub(crate) fn stamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-fn parse_stamp(value: &Value) -> Option<DateTime<Utc>> {
+pub(crate) fn parse_stamp(value: &Value) -> Option<DateTime<Utc>> {
     match value {
         Value::Text(s) => DateTime::parse_from_rfc3339(s).ok().map(|t| t.with_timezone(&Utc)),
         _ => None,
@@ -736,6 +762,9 @@ mod tests {
             mode: Mode::Listen,
             appearance: Appearance::Dark,
             input_boost: 1.5,
+            cli: crate::llm::Cli::Codex,
+            model: "gpt-6.2-sol".into(),
+            effort: crate::llm::Effort::Max,
             ..Settings::default()
         };
         store.save_settings(&settings).unwrap();

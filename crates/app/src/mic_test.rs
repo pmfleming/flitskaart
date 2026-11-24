@@ -173,7 +173,7 @@ impl FlashcardsApp {
         cx.notify();
     }
 
-    pub fn render_mic_test(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn render_mic_test(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
         let test = &self.mic_test;
         let recording = test.capture.is_on();

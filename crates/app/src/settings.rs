@@ -17,6 +17,9 @@ use crate::ui::{explained, hint, icon_button, section, segment_button, segmented
 
 /// The microphone & speech section is the second item inside Instellingen.
 pub const MICROPHONE_SECTION: usize = 1;
+/// The language model and usage sections, for `--keys taalmodel` and `verbruik`.
+pub const LLM_SECTION: usize = 3;
+pub const USAGE_SECTION: usize = 4;
 
 impl FlashcardsApp {
     fn set_gender(&mut self, gender: Gender, cx: &mut Context<Self>) {
@@ -103,24 +106,25 @@ impl FlashcardsApp {
                 .child(self.paths.root().display().to_string()),
         );
 
+        // The sections are the scroll area's own children, so it can bring
+        // one into view by its place (see MICROPHONE_SECTION).
+        let sections = [
+            self.render_voices(cx),
+            self.render_mic_test(cx),
+            h_flex().flex_wrap().items_stretch().gap_4().child(appearance_card).child(limit_card),
+            self.render_llm(cx),
+            self.render_usage(cx),
+            data_card,
+        ];
         v_flex()
             .id("settings")
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.settings_scroll)
             .p_5()
-            .child(
-                v_flex()
-                    .w_full()
-                    .max_w(px(720.))
-                    .mx_auto()
-                    .gap_4()
-                    .pb_6()
-                    .child(self.render_voices(cx))
-                    .child(self.render_mic_test(cx))
-                    .child(h_flex().flex_wrap().items_stretch().gap_4().child(appearance_card).child(limit_card))
-                    .child(data_card),
-            )
+            .pb_10()
+            .gap_4()
+            .children(sections.map(|section| section.w_full().max_w(px(720.)).mx_auto()))
     }
 
     /// Man or woman, then the voices of that gender to try and choose.

@@ -3,7 +3,7 @@
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::claude::Claude;
+use crate::llm::Llm;
 use crate::model::NewCard;
 
 pub const DEFAULT_LIMIT: usize = 6;
@@ -94,27 +94,27 @@ fn request_text(snippet: &str, steer: &str, limit: usize) -> String {
 
 /// Asks Claude Code for draft cards. Blocks for several seconds, so call it off
 /// the UI thread.
-pub fn draft_cards(claude: &Claude, snippet: &str, steer: &str, limit: usize) -> Result<Vec<NewCard>> {
+pub fn draft_cards(llm: &Llm, snippet: &str, steer: &str, limit: usize) -> Result<Vec<NewCard>> {
     if snippet.trim().is_empty() {
         bail!("Plak eerst een stuk van een gesprek.");
     }
-    cards_from(claude.ask(INSTRUCTIONS, SCHEMA, &request_text(snippet, steer, limit))?, limit)
+    cards_from(llm.ask(INSTRUCTIONS, SCHEMA, &request_text(snippet, steer, limit))?, limit)
 }
 
 /// Reviews a finished Gesprek in the same call that extracts its cards.
-pub fn review_conversation(claude: &Claude, transcript: &str, steer: &str, limit: usize) -> Result<(Vec<NewCard>, String)> {
+pub fn review_conversation(llm: &Llm, transcript: &str, steer: &str, limit: usize) -> Result<(Vec<NewCard>, String)> {
     let request = request_text(transcript, steer, limit);
     let request = format!(
         "This is a finished Gesprek session. Also write \"recap\" in simple Dutch, directly addressing the learner as \"je\". Give one short sentence about what they discussed and, if there was a clear learning need, one phrase worth remembering. Base it on the learner's own lines.\n{request}"
     );
-    let answer = claude.ask(INSTRUCTIONS, SCHEMA, &request)?;
+    let answer = llm.ask(INSTRUCTIONS, SCHEMA, &request)?;
     let recap = answer["recap"].as_str().unwrap_or_default().trim().chars().take(400).collect();
     Ok((cards_from(answer, limit)?, recap))
 }
 
 /// The usable cards in Claude's answer: no blanks or repeats, at most `limit`.
 fn cards_from(answer: serde_json::Value, limit: usize) -> Result<Vec<NewCard>> {
-    let reply: Reply = serde_json::from_value(answer).context("Claude Code gaf kaarten in een onverwachte vorm")?;
+    let reply: Reply = serde_json::from_value(answer).context("Het taalmodel gaf kaarten in een onverwachte vorm")?;
     let mut seen = std::collections::HashSet::new();
     Ok(reply
         .cards
@@ -128,7 +128,7 @@ fn cards_from(answer: serde_json::Value, limit: usize) -> Result<Vec<NewCard>> {
 #[cfg(test)]
 mod tests {
     use super::{NewCard, cards_from, parse_manual, request_text};
-    use crate::claude::answer;
+    use crate::llm::answer;
 
     fn parse_reply(stdout: &str, limit: usize) -> anyhow::Result<Vec<NewCard>> {
         cards_from(answer(stdout)?, limit)

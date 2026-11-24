@@ -4,6 +4,7 @@ mod add;
 mod app;
 mod audio;
 mod capture;
+mod llm_settings;
 mod deck;
 mod drafts;
 mod icons;
@@ -114,7 +115,7 @@ impl FlashcardsApp {
     }
 
     /// Replays study keys; on Instellingen, `microfoon` runs the microphone
-    /// test; on Gesprek, `begin` starts a conversation and `spreek` answers
+    /// test and `taalmodel` or `verbruik` scroll to those sections; on Gesprek, `begin` starts a conversation and `spreek` answers
     /// by voice. `wacht` waits until recording, listening and Claude are done.
     fn replay_keys(&mut self, mut keys: VecDeque<String>, window: &mut Window, cx: &mut Context<Self>) {
         while let Some(key) = keys.pop_front() {
@@ -122,16 +123,19 @@ impl FlashcardsApp {
                 (_, "wacht") => return self.replay_when_idle(keys, window, cx),
                 (Screen::Study, key) => _ = self.study_key(key, window, cx),
                 (Screen::Settings, "microfoon") => self.start_mic_test(cx),
+                (Screen::Settings, "taalmodel") => self.settings_scroll.scroll_to_item(crate::settings::LLM_SECTION),
+                (Screen::Settings, "verbruik") => self.settings_scroll.scroll_to_item(crate::settings::USAGE_SECTION),
                 (Screen::Talk, "begin") => self.start_conversation(window, cx),
                 (Screen::Talk, "spreek") => self.speak_answer(cx),
                 _ => {}
             }
         }
+        cx.notify();
     }
 
     fn replay_when_idle(&mut self, keys: VecDeque<String>, window: &mut Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| {
-            while this.update(cx, |this, _| this.busy()).unwrap_or(false) {
+            while this.update(cx, |this, _| this.busy() || this.finding_models).unwrap_or(false) {
                 cx.background_executor().timer(Duration::from_millis(100)).await;
             }
             let _ = this.update_in(cx, |this, window, cx| this.replay_keys(keys, window, cx));

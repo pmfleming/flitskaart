@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use dutch_flashcards_core::Store;
-use dutch_flashcards_core::claude::Claude;
+use dutch_flashcards_core::llm::{Cli, Llm, ModelChoice};
 use dutch_flashcards_core::paths::Paths;
 use dutch_flashcards_core::speech::Listener;
 use dutch_flashcards_core::store::{Appearance, Settings};
@@ -64,7 +64,7 @@ pub struct FlashcardsApp {
     pub store: Store,
     pub listener: Listener,
     /// Claude Code, for drafting cards and for conversations.
-    pub claude: Claude,
+    pub llm: Llm,
     /// A WAV file used in place of the microphone (`--recording`), for checks.
     pub fake_recording: Option<std::path::PathBuf>,
     pub settings: Settings,
@@ -76,6 +76,13 @@ pub struct FlashcardsApp {
     pub mic_test: MicTest,
     /// Instellingen scrolls; the microphone test brings its result into view.
     pub settings_scroll: ScrollHandle,
+    /// Instellingen shows Claude's use per day instead of per model.
+    pub usage_by_day: bool,
+    /// The models the logged-in tools offer; `None` until they have been asked.
+    pub llm_choices: Option<Vec<ModelChoice>>,
+    pub finding_models: bool,
+    /// The tool whose models Instellingen shows.
+    pub llm_tab: Option<Cli>,
     pub add: AddState,
     pub drafts: Vec<DraftRow>,
     pub deck: DeckState,
@@ -97,12 +104,16 @@ impl FlashcardsApp {
         let mut app = FlashcardsApp {
             sound: Sound::new(&paths),
             listener: Listener::new(&paths),
-            claude: Claude::from_env(),
+            llm: Llm::from_env(),
             fake_recording: None,
             study: StudyState::new(settings.mode, cx),
             talk: TalkState::new(window, cx),
             mic_test: MicTest::new(settings.input_boost, cx),
             settings_scroll: ScrollHandle::new(),
+            usage_by_day: false,
+            llm_choices: None,
+            finding_models: false,
+            llm_tab: None,
             add: AddState::new(window, cx),
             deck: DeckState::new(window, cx),
             drafts: Vec::new(),
@@ -114,6 +125,8 @@ impl FlashcardsApp {
             notice_ticket: 0,
             _appearance_changed: appearance_changed,
         };
+        let (cli, model, effort) = (app.settings.cli, app.settings.model.clone(), app.settings.effort);
+        app.llm.choose(cli, &model, effort);
         app.apply_appearance(window, cx);
         app.reload_drafts(window, cx);
         app.reload_deck();
@@ -129,7 +142,10 @@ impl FlashcardsApp {
         match screen {
             Screen::Study if self.study.card.is_none() => self.load_next_card(cx),
             Screen::Deck => self.reload_deck(),
-            Screen::Settings => self.refresh_inputs(cx),
+            Screen::Settings => {
+                self.refresh_inputs(cx);
+                self.find_models_once(cx);
+            }
             _ => {}
         }
         match screen {
@@ -299,6 +315,11 @@ impl FlashcardsApp {
 
 impl Render for FlashcardsApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Claude's answers note their token use; keep it with the deck.
+        let used = self.llm.usage.take();
+        if !used.is_empty() && let Err(err) = self.store.add_usage(&used, Self::now()) {
+            crate::logging::error("verbruik", format!("{err:#}"));
+        }
         let body = match self.screen {
             Screen::Study => self.render_study(cx).into_any_element(),
             Screen::Talk => self.render_talk(cx).into_any_element(),

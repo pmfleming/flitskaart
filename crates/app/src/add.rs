@@ -70,10 +70,10 @@ impl FlashcardsApp {
         }
         self.add.busy = true;
         cx.notify();
-        let (limit, claude) = (limit_from(&steer), self.claude.clone());
+        let (limit, llm) = (limit_from(&steer), self.llm.clone());
         // The job hands the text back with its result, for storing alongside the drafts.
         let job = cx.background_executor().spawn(async move {
-            let result = drafting::draft_cards(&claude, &snippet, &steer, limit);
+            let result = drafting::draft_cards(&llm, &snippet, &steer, limit);
             (snippet, steer, result)
         });
         cx.spawn_in(window, async move |this, cx| {
@@ -82,7 +82,7 @@ impl FlashcardsApp {
                 this.add.busy = false;
                 match result {
                     Ok(cards) if cards.is_empty() => {
-                        this.add.error = Some("Claude vond niets om te leren in dit stuk.".into());
+                        this.add.error = Some("Het taalmodel vond niets om te leren in dit stuk.".into());
                     }
                     Ok(cards) => this.store_drafts(&snippet, &steer, cards, window, cx),
                     Err(err) => this.add.error = Some(crate::logging::error("toevoegen", format!("{err:#}")).into()),
@@ -130,9 +130,9 @@ impl FlashcardsApp {
             .flatten();
 
         let status = if self.add.busy {
-            hint("Claude maakt kaarten…", cx).into_any_element()
+            hint(format!("{} maakt kaarten…", self.llm.cli.name()), cx).into_any_element()
         } else if let Some(count) = manual_count {
-            let label = if count == 1 { "1 kaart, zonder Claude".to_string() } else { format!("{count} kaarten, zonder Claude") };
+            let label = if count == 1 { "1 kaart, zonder taalmodel".to_string() } else { format!("{count} kaarten, zonder taalmodel") };
             h_flex()
                 .items_center()
                 .gap_1()
@@ -146,7 +146,7 @@ impl FlashcardsApp {
                 .child(label)
                 .into_any_element()
         } else {
-            explained("manual-tip", "Regels als  Nederlands | English | uitleg  worden direct kaarten, zonder Claude.")
+            explained("manual-tip", "Regels als  Nederlands | English | uitleg  worden direct kaarten, zonder taalmodel.")
                 .text_color(theme.muted_foreground)
                 .child(icons::tip().size_5())
                 .into_any_element()
@@ -162,7 +162,7 @@ impl FlashcardsApp {
                     cx.notify();
                 }))
         }));
-        let steer_icon = explained("steer-tip", "Aanwijzing voor Claude (optioneel)").text_color(theme.muted_foreground).child(icons::steer().size_4());
+        let steer_icon = explained("steer-tip", "Aanwijzing voor het taalmodel (optioneel)").text_color(theme.muted_foreground).child(icons::steer().size_4());
 
         let submit = Button::new("make")
             .primary()

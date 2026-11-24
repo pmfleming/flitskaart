@@ -7,7 +7,7 @@ pub use research::{Source, look_up};
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::claude::Claude;
+use crate::llm::Llm;
 use crate::model::normalize;
 
 /// The topic Claude picks when the learner leaves it open.
@@ -210,25 +210,25 @@ pub struct Reply {
 
 /// Asks Claude for the next turn. Blocks for several seconds, so call it off
 /// the UI thread. `request` comes from [`Conversation::request`].
-pub fn next_turn(claude: &Claude, request: &str) -> Result<Reply> {
-    let reply: Reply = serde_json::from_value(claude.ask(INSTRUCTIONS, SCHEMA, request)?)
-        .context("Claude Code antwoordde in een onverwachte vorm")?;
+pub fn next_turn(llm: &Llm, request: &str) -> Result<Reply> {
+    let reply: Reply = serde_json::from_value(llm.ask(INSTRUCTIONS, SCHEMA, request)?)
+        .context("Het taalmodel antwoordde in een onverwachte vorm")?;
     if reply.reply.trim().is_empty() {
-        bail!("Claude Code gaf geen antwoord in het gesprek.");
+        bail!("Het taalmodel gaf geen antwoord in het gesprek.");
     }
     Ok(reply)
 }
 
 /// Looks up a new factual question only when the partner needs fresh evidence.
-pub fn continue_turn(claude: &Claude, request: &str) -> Result<(Reply, Vec<Source>)> {
-    let reply = next_turn(claude, request)?;
+pub fn continue_turn(llm: &Llm, request: &str) -> Result<(Reply, Vec<Source>)> {
+    let reply = next_turn(llm, request)?;
     if reply.finished || reply.lookup_query.trim().is_empty() {
         return Ok((reply, Vec::new()));
     }
     let query: String = reply.lookup_query.trim().chars().take(300).collect();
-    let sources = look_up(claude, &query).unwrap_or_default();
+    let sources = look_up(llm, &query).unwrap_or_default();
     let result = serde_json::json!({"query": query, "sources": sources, "found": !sources.is_empty()});
-    let reply = next_turn(claude, &format!("{request}\nLookup results: {result}"))?;
+    let reply = next_turn(llm, &format!("{request}\nLookup results: {result}"))?;
     Ok((reply, sources))
 }
 
@@ -374,7 +374,7 @@ impl Conversation {
 #[cfg(test)]
 mod tests {
     use super::{Conversation, Reply, Said, Translation, Who, next_turn};
-    use crate::claude::Claude;
+    use crate::llm::Llm;
 
     fn reply(corrected: &str, explanation: &str, next: &str) -> Reply {
         Reply { corrected: corrected.into(), explanation: explanation.into(), reply: next.into(), reply_english: "English".into(), ..Reply::default() }
@@ -484,7 +484,7 @@ mod tests {
         let envelope = r#"{"is_error":false,"result":"","structured_output":{"corrected":"","explanation":"","reply":" ","reply_english":""}}"#;
         std::fs::write(&program, format!("#!/bin/sh\ncat > /dev/null\necho '{envelope}'\n")).unwrap();
         std::fs::set_permissions(&program, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-        let claude = Claude { program, model: "sonnet".into() };
-        assert!(next_turn(&claude, "Topic: x").unwrap_err().to_string().contains("geen antwoord"));
+        let llm = Llm { program, ..Llm::new(crate::llm::Cli::ClaudeCode, "sonnet") };
+        assert!(next_turn(&llm, "Topic: x").unwrap_err().to_string().contains("geen antwoord"));
     }
 }
