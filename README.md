@@ -23,12 +23,15 @@ The two tests:
   **Toon tekst**.)
 - **Schrijf** (`W`) – the Dutch turns into blanks, one short line per letter, and
   you type it. Spaces and punctuation are filled in; case and accents don't
-  matter (e for é). A right letter flashes green and turns white; a wrong key
-  turns the waiting blank red, and that letter stays red once you find it. After
-  three wrong keys the letter is shown in red and the next one waits. Every key
-  goes to the writing until it is done; `Esc` stops it. The grade is the share
-  of letters right first time, on the same 1–4 scale as speaking. Writing it again
-  doesn't change the grade.
+  matter (e for é). Every key fills the next blank: a right letter flashes green
+  and turns white, a wrong one shows in red. You may be wrong: go back with
+  `Backspace` to fix a red letter (it keeps a faint red mark), or carry on.
+  Writing every letter right finishes by itself; otherwise `Enter` or **Klaar**
+  finishes and shows the sentence corrected, the letters you missed in red.
+  `Esc` stops without a grade. Every key goes to the writing until it is done.
+  The grade is the share of letters right first time, on the same 1–4 scale as
+  speaking; a fixed letter doesn't count as right. Writing it again doesn't
+  change the grade.
 
 The helpers, top right in the card (they never decide the review):
 
@@ -63,7 +66,7 @@ understood: 95%+ is 4 (Heel duidelijk), 85%+ is 3, 65%+ is 2, less is 1.
 | --- | --- |
 | `Space` | Test the reading (or stop the recording); in Luisteren, show the text |
 | `1`–`4` | Score the card and go to the next one |
-| `W` | Write the card (`Esc` stops) |
+| `W` | Write the card (`Backspace` fixes, `Enter` finishes, `Esc` stops) |
 | `R` / `O` | Test again / play your own recording |
 | `Esc` | Cancel a recording |
 | `V` | Show or hide the meaning |

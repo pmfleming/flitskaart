@@ -1,5 +1,7 @@
 //! Writing the card: its Dutch turns into blanks in the panel and the learner
-//! types it. Right letters flash green and settle; wrong ones turn red and stay.
+//! types it. Every key fills the next blank. A right letter flashes green and
+//! settles; a wrong one shows in red. Backspace goes back to fix it, and Enter
+//! finishes, showing the missed letters corrected in red.
 
 use std::time::Duration;
 
@@ -13,7 +15,7 @@ use gpui_kit::{
 use crate::app::FlashcardsApp;
 use crate::icons;
 use crate::speaking::grade_chip;
-use crate::ui::{explained, hint};
+use crate::ui::{explained, hint, keycap};
 
 /// How long a right letter takes to go from green back to the text colour.
 const SETTLE: Duration = Duration::from_millis(900);
@@ -36,37 +38,54 @@ impl FlashcardsApp {
         cx.notify();
     }
 
-    /// One key while writing: a character to check, or Esc to stop.
-    pub fn write_key(&mut self, key: &str, cx: &mut Context<Self>) {
-        if key == "escape" {
-            return self.stop_writing(cx);
+    /// Ends the writing as it stands, showing what was missed.
+    pub fn finish_writing(&mut self, cx: &mut Context<Self>) {
+        if let Some(writing) = self.study.attempt.writing.as_mut() {
+            writing.finish();
         }
-        let mut chars = key.chars();
-        let (Some(typed), None) = (chars.next(), chars.next()) else { return };
+        self.after_writing(cx);
+    }
+
+    /// One key while writing: a character, Backspace, Enter to finish, Esc to stop.
+    pub fn write_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(writing) = self.study.attempt.writing.as_mut() else { return };
+        match key {
+            "escape" => return self.stop_writing(cx),
+            "enter" => return self.finish_writing(cx),
+            "backspace" => _ = writing.back(),
+            _ => {
+                let mut chars = key.chars();
+                if let (Some(typed), None) = (chars.next(), chars.next()) {
+                    writing.type_char(typed);
+                }
+            }
+        }
+        self.after_writing(cx);
+    }
+
+    /// Keeps the first finished result; in Luisteren, a written sentence has been shown.
+    fn after_writing(&mut self, cx: &mut Context<Self>) {
         let attempt = &mut self.study.attempt;
-        let Some(writing) = attempt.writing.as_mut() else { return };
-        writing.type_char(typed);
-        if let Some(result) = writing.result() {
+        if let Some(result) = attempt.writing.as_ref().and_then(Writing::result) {
             attempt.written.get_or_insert(result);
-            // In Luisteren, a written sentence has been shown.
             attempt.revealed = true;
         }
         cx.notify();
     }
 
-    /// The card as blanks, words kept whole when the line wraps. The waiting
-    /// letter's blank is in the accent colour.
+    /// The card as blanks, words kept whole when the line wraps. The blank
+    /// the next key fills is in the accent colour.
     pub fn render_writing(&self, writing: &Writing, cx: &App) -> Div {
         let theme = cx.theme();
         let colors = Colors { text: theme.foreground, right: theme.success, wrong: theme.danger, blank: theme.muted_foreground.opacity(0.45), cursor: theme.primary };
         let mut words = Vec::new();
         let mut word = Vec::new();
-        for (index, &(letter, slot)) in writing.cells().iter().enumerate() {
+        for (index, (letter, slot)) in writing.cells().enumerate() {
             if letter.is_whitespace() {
                 words.push(std::mem::take(&mut word));
                 continue;
             }
-            let id = SharedString::from(format!("write-{}-{index}", self.study.write_round));
+            let id = SharedString::from(format!("write-{}-{index}-{}", self.study.write_round, writing.typed_count(index)));
             word.push(cell(letter, slot, writing.cursor() == Some(index), id, colors));
         }
         words.push(word);
@@ -83,14 +102,36 @@ impl FlashcardsApp {
             .children(words.into_iter().filter(|word| !word.is_empty()).map(|word| h_flex().children(word)))
     }
 
-    /// How the finished writing went: its grade and the share right first time.
+    /// Under the writing: how to fix or finish once every blank is filled,
+    /// then the grade and the share right first time.
     pub fn render_written(&self, cx: &App) -> Option<Div> {
-        let result = self.study.attempt.writing.as_ref()?.result()?;
+        let writing = self.study.attempt.writing.as_ref()?;
+        if writing.is_full() {
+            return Some(
+                h_flex()
+                    .gap_1p5()
+                    .items_center()
+                    .child(keycap("Backspace", cx))
+                    .child(hint("verbeter", cx))
+                    .child(hint("·", cx))
+                    .child(keycap("Enter", cx))
+                    .child(hint("toon de verbetering", cx)),
+            );
+        }
+        let result = writing.result()?;
         Some(
             h_flex()
                 .gap_2()
                 .items_center()
-                .child(explained("written-grade", "Schrijven").flex().items_center().gap_2().text_color(cx.theme().muted_foreground).child(icons::write().size_4()).child(grade_chip(result.grade, cx)))
+                .child(
+                    explained("written-grade", "Schrijven")
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(icons::write().size_4())
+                        .child(grade_chip(result.grade, cx)),
+                )
                 .child(explained("written-accuracy", "Zoveel letters in één keer goed").child(hint(format!("{:.0}%", result.accuracy * 100.0), cx))),
         )
     }
@@ -108,23 +149,27 @@ struct Colors {
 /// One character, as wide as its letter. A blank is a short line under where
 /// the letter goes, inset so neighbouring blanks stay apart.
 fn cell(letter: char, slot: Slot, at_cursor: bool, id: SharedString, colors: Colors) -> AnyElement {
-    let hidden = gpui_kit::transparent_black();
     let line = match slot {
         Slot::Blank if at_cursor => Some(colors.cursor),
         Slot::Blank => Some(colors.blank),
-        Slot::Missed => Some(colors.wrong),
+        // A fixed letter keeps a faint mark of the mistake.
+        Slot::Fixed => Some(colors.wrong.opacity(0.5)),
         _ => None,
+    };
+    let shown = match slot {
+        Slot::Wrong(typed) => typed,
+        _ => letter,
     };
     let base = div()
         .relative()
-        .child(letter.to_string())
+        .child(shown.to_string())
         .children(line.map(|color| div().absolute().bottom(px(2.)).left(px(1.5)).right(px(1.5)).h(px(2.)).rounded_full().bg(color)));
     match slot {
         Slot::Given => base.text_color(colors.text).into_any_element(),
-        Slot::Blank | Slot::Missed => base.text_color(hidden).into_any_element(),
-        Slot::Wrong => base.text_color(colors.wrong).into_any_element(),
+        Slot::Blank => base.text_color(gpui_kit::transparent_black()).into_any_element(),
+        Slot::Wrong(_) | Slot::Shown => base.text_color(colors.wrong).into_any_element(),
         // Green for a moment, then back to the text colour.
-        Slot::Right => base
+        Slot::Right | Slot::Fixed => base
             .text_color(colors.right)
             .with_animation(id, Animation::new(SETTLE), move |cell, t| cell.text_color(colors.right.mix_oklab(colors.text, 1. - ((t - 0.35) / 0.65).clamp(0., 1.))))
             .into_any_element(),

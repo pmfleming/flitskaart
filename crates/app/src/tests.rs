@@ -89,17 +89,20 @@ fn a_deck_from_paste_to_practice(cx: &mut TestAppContext) {
     app.click(cx, [row("english", ids[0]), row("source", ids[0]), row("discard", ids[2]), row("accept", ids[0]), "accept-all".into()]);
     assert_eq!(app.read(cx, |app| (app.drafts.len(), app.deck.cards.len())), (0, 2));
 
-    // Lezen: write the card with one wrong key, so that letter stays red; the
+    // Lezen: write the card with one wrong key, fixed with Backspace; the
     // writing then grades the review. Every key goes to the writing meanwhile.
     app.show(cx, Screen::Study);
     let dutch = app.read(cx, |app| app.study.card.as_ref().unwrap().dutch.clone());
     let letters: Vec<String> = dutch.chars().filter(|c| c.is_alphanumeric()).map(|c| c.to_lowercase().to_string()).collect();
     app.press(cx, "w q");
-    app.click(cx, ["write".into(), "write".into()]);
-    assert!(app.read(cx, |app| app.study.attempt.writing.as_ref().is_some_and(|w| w.cursor() == Some(0))), "stopped and started afresh");
-    app.press(cx, &format!("q {}", letters.join(" ")));
+    assert!(app.read(cx, |app| app.study.attempt.writing.as_ref().is_some_and(|w| w.cursor() == Some(1))), "a wrong letter fills its blank");
+    app.press(cx, &format!("backspace {}", letters.join(" ")));
     let written = app.read(cx, |app| app.study.attempt.written.expect("written"));
     assert!(written.accuracy < 1.0 && written.accuracy > 0.8, "{written:?}");
+    // Writing again and finishing early shows the rest; the first grade stays.
+    app.click(cx, ["write".into()]);
+    app.press(cx, "enter");
+    assert!(app.read(cx, |app| app.study.attempt.writing.as_ref().is_some_and(|w| w.is_done()) && app.study.attempt.written == Some(written)));
 
     // The meaning counts against the review; then Luisteren, veiled until Space.
     app.press(cx, "v h 3");

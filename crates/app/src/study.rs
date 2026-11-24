@@ -74,7 +74,7 @@ impl Attempt {
     /// The write button's icon, label and name on hover.
     fn write_action(&self) -> (Icon, &'static str, &'static str) {
         match &self.writing {
-            Some(writing) if !writing.is_done() => (icons::close(), "Stop", "Stop met schrijven (Esc)"),
+            Some(writing) if !writing.is_done() => (icons::check(), "Klaar", "Toon de verbetering (Enter) · Esc stopt"),
             Some(_) => (icons::write(), "Opnieuw", "Schrijf de zin opnieuw (W)"),
             None => (icons::write(), "Schrijf", "Schrijf de zin (W)"),
         }
@@ -461,8 +461,8 @@ impl FlashcardsApp {
         let (icon, label, tip) = attempt.write_action();
         let write = action("write", icon, label, tip)
             .disabled(self.busy_listening())
-            .on_click(self.study_click(|this, cx| if this.writing_now() { this.stop_writing(cx) } else { this.start_writing(cx) }, cx));
-        h_flex().gap_3().justify_center().children(first).child(if writing { write.danger() } else { write })
+            .on_click(self.study_click(|this, cx| if this.writing_now() { this.finish_writing(cx) } else { this.start_writing(cx) }, cx));
+        h_flex().gap_3().justify_center().children(first).child(write)
     }
 
     /// The four scores: how easily the sentence came back. Nothing else.
