@@ -78,6 +78,9 @@ fn row(name: &'static str, id: u64) -> ElementId {
 #[gpui_kit::test]
 fn a_deck_from_paste_to_practice(cx: &mut TestAppContext) {
     let app = Harness::open(cx);
+    assert_eq!(Screen::named("voortgang"), Some(Screen::Progress));
+    app.show(cx, Screen::Progress);
+    assert!(app.read(cx, |app| app.progress.as_ref().is_some_and(|p| !p.started)), "nothing practised yet");
     app.show(cx, Screen::Add);
     app.click(cx, ["make".into()]);
     assert!(app.read(cx, |app| app.add.error.is_some()), "nothing pasted yet");
@@ -116,6 +119,13 @@ fn a_deck_from_paste_to_practice(cx: &mut TestAppContext) {
     // Everything has had its turn: the scored card waits its 10 minutes, so
     // the session is done, with the skipped card on offer.
     assert!(app.read(cx, |app| app.study.card.is_none()), "all done, nothing shown early");
+    assert_eq!(app.read(cx, |app| app.study.streak.days), 1, "Alles gedaan shows the streak");
+    // Voortgang: one card scored and timed, the other skipped and still waiting.
+    app.show(cx, Screen::Progress);
+    let progress = app.read(cx, |app| app.progress.clone().unwrap());
+    assert_eq!((progress.streak.days, progress.today.done, progress.today.waiting, progress.learned), (1, 1, 1, 1));
+    assert!(progress.started && progress.reviews == 1 && progress.writing.is_some() && progress.seconds >= 0.0);
+    app.show(cx, Screen::Study);
     app.click(cx, ["rest-skipped".into()]);
     assert_eq!(app.read(cx, |app| app.study.card.as_ref().map(|card| card.id)), Some(skipped));
     app.click(cx, ["mode-Luisteren".into()]);
@@ -274,4 +284,10 @@ fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
     app.act(cx, |app, _, _| app.llm.program = program);
     app.click(cx, ["talk-retry-cards".into()]);
     assert_eq!(app.read(cx, |app| app.drafts.len()), 3);
+
+    // Each conversation counts towards Voortgang from its first answered line.
+    app.show(cx, Screen::Progress);
+    let progress = app.read(cx, |app| app.progress.clone().unwrap());
+    assert_eq!(progress.talking.map(|t| (t.talks, t.lines)), Some((3, 4)));
+    assert_eq!((progress.started, progress.streak.days, progress.reviews), (true, 1, 0), "a conversation keeps the streak");
 }

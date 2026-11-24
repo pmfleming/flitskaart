@@ -10,6 +10,7 @@ pub mod model;
 pub mod paths;
 pub mod schedule;
 pub mod speech;
+pub mod stats;
 pub mod store;
 pub mod usage;
 pub mod voice;

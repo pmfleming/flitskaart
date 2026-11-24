@@ -3,6 +3,7 @@
 
 use dutch_flashcards_core::schedule::{Scheduler, describe_due};
 use dutch_flashcards_core::speech::{Assessment, missed_ranges};
+use dutch_flashcards_core::stats::Streak;
 use dutch_flashcards_core::store::{Counts, Mode, Review};
 use dutch_flashcards_core::voice::Speed;
 use dutch_flashcards_core::writing::{Writing, Written};
@@ -29,7 +30,12 @@ pub struct StudyState {
     pub mode: Mode,
     pub card: Option<Card>,
     pub counts: Counts,
+    /// Reviews saved today, read from the deck so it survives a restart.
     pub reviewed_today: usize,
+    /// Days in a row with practice, for the rest screen.
+    pub streak: Streak,
+    /// When the current card appeared, to time its review.
+    pub shown_at: Option<chrono::DateTime<chrono::Utc>>,
     pub attempt: Attempt,
     pub scheduler: Scheduler,
     /// Counts writings, so each one's letters animate afresh.
@@ -88,7 +94,7 @@ impl Attempt {
 
 impl StudyState {
     pub fn new(mode: Mode, cx: &mut App) -> Self {
-        StudyState { focus: cx.focus_handle(), mode, card: None, counts: Counts::default(), reviewed_today: 0, attempt: Attempt::default(), scheduler: Scheduler::default(), write_round: 0, skipped: Vec::new(), extra_new: 0, wake_ticket: 0 }
+        StudyState { focus: cx.focus_handle(), mode, card: None, counts: Counts::default(), reviewed_today: 0, streak: Streak::default(), shown_at: None, attempt: Attempt::default(), scheduler: Scheduler::default(), write_round: 0, skipped: Vec::new(), extra_new: 0, wake_ticket: 0 }
     }
 
     /// Scores are open from the start in Lezen, and once the text is shown in Luisteren.
@@ -107,6 +113,8 @@ struct Left {
     deck: usize,
     drafts: usize,
     reviewed: usize,
+    /// Days in a row with practice.
+    streak: u32,
     /// When the next card is due, in words.
     next_due: Option<String>,
     skipped: usize,
@@ -146,7 +154,9 @@ impl Rest {
             },
             (0, _) => Rest { icon: icons::drafts(), title: "Controleer eerst je concepten", detail: "", stats: Vec::new(), actions: to_drafts().into_iter().collect() },
             _ => {
+                let days = |n: u32| if n == 1 { "1 dag".to_string() } else { format!("{n} dagen") };
                 let stats = [
+                    (left.streak > 0).then(|| (icons::flame(), days(left.streak), "Dagen op rij")),
                     (left.reviewed > 0).then(|| (icons::check(), left.reviewed.to_string(), "Vandaag geoefend")),
                     left.next_due.map(|when| (icons::due(), when, "Volgende kaart")),
                     (left.skipped > 0).then(|| (icons::skip(), left.skipped.to_string(), "Overgeslagen")),
@@ -179,6 +189,8 @@ impl FlashcardsApp {
     pub fn load_next_card(&mut self, cx: &mut Context<Self>) {
         let (now, per_day) = (Self::now(), self.new_limit());
         self.study.counts = self.store.counts(now, per_day).unwrap_or_default();
+        self.study.reviewed_today = self.store.reviewed_today(now).unwrap_or_default();
+        self.study.streak = self.store.streak(now).unwrap_or_default();
         match self.store.next_card(now, per_day, &self.study.skipped) {
             Ok(card) => {
                 let rest = card.is_none();
@@ -229,6 +241,7 @@ impl FlashcardsApp {
         self.stop_audio();
         self.study.attempt = Attempt::default();
         let text = card.as_ref().map(|card| card.dutch.clone());
+        self.study.shown_at = card.as_ref().map(|_| Self::now());
         self.study.card = card;
         match (text, self.study.mode) {
             (Some(text), Mode::Listen) => self.say(text, cx),
@@ -278,12 +291,12 @@ impl FlashcardsApp {
     /// Saves the learner's score and moves straight to the next card.
     fn score(&mut self, own: Grade, cx: &mut Context<Self>) {
         let Some(card) = self.study.card.as_ref().filter(|_| self.study.scoring_open() && !self.busy_listening() && !self.writing_now()) else { return };
-        let attempt = &self.study.attempt;
-        let review = Review { own, speech: attempt.speech.as_ref(), written: attempt.written, mode: self.study.mode, peeked: attempt.peeked };
-        if let Err(err) = self.store.record_review(card.id, review, &self.study.scheduler, Self::now()) {
+        let (attempt, now) = (&self.study.attempt, Self::now());
+        let seconds = self.study.shown_at.map(|shown| (now - shown).num_milliseconds() as f64 / 1000.0);
+        let review = Review { own, speech: attempt.speech.as_ref(), written: attempt.written, mode: self.study.mode, peeked: attempt.peeked, seconds };
+        if let Err(err) = self.store.record_review(card.id, review, &self.study.scheduler, now) {
             return self.error(format!("De beoordeling is niet bewaard: {err:#}"));
         }
-        self.study.reviewed_today += 1;
         self.load_next_card(cx);
     }
 
@@ -601,6 +614,7 @@ impl FlashcardsApp {
             deck: self.deck.cards.len(),
             drafts: self.drafts.len(),
             reviewed: self.study.reviewed_today,
+            streak: self.study.streak.days,
             next_due: self.store.next_due_after(now).ok().flatten().map(|due| describe_due(due, now)),
             skipped: skipped.len(),
             new_later: self.store.unstudied().unwrap_or_default().saturating_sub(skipped_new),

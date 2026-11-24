@@ -91,7 +91,7 @@ card has had its turn, only cards scheduled for later are left and Oefenen shows
 skipped and how many new cards the daily limit held back. Its buttons bring the
 skipped cards back, or allow more new cards today. A card in its first minutes
 (after Weet ik niet or Moeilijk) pops back up by itself when it falls due, if
-Oefenen is open.
+Oefenen is open. Alles gedaan also shows your streak of days in a row.
 
 ## Gesprek
 
@@ -134,12 +134,51 @@ That includes useful corrections, phrases you wanted to practise and words you
 asked how to say. Review the cards in **Concepten**. **Bron** shows the transcript
 and source links. Gesprek also offers a short **Terugblik** for the latest
 reviewed conversation. If drafting fails, retry it from Gesprek. A conversation
-in progress is lost if you close the app.
+in progress is lost if you close the app. From your first answered line it
+still counts in Voortgang.
+
+## Voortgang
+
+How your practice is going, worked out from what the deck already stores each
+time the tab opens. A day is a local calendar day.
+
+- **Dagen op rij** – days in a row with at least one scored card or one
+  answered line in Gesprek. Skipping a card doesn't count. Before today's first
+  card the run up to yesterday still shows, with a grey flame. The seven
+  circles are the last week, and your longest run is kept. There is no freeze:
+  a missed day starts again.
+- **Vandaag** – cards scored today that aren't due again yet, out of those
+  plus what Oefenen still has waiting. A full bar is Alles gedaan.
+- **Totals** – cards learned (studied at least once), cards that stick
+  (**Sterk**, below), **onthouden** (of the reviews in the last 30 days that
+  came a day or more after the card's previous one, the share you didn't score
+  Weet ik niet; it shows a dash until there are 10), and minutes practised in
+  the last 30 days. Minutes are counted from the card appearing to your score, at most
+  2 minutes a card, and from the partner's line to your answer in Gesprek, at
+  most 3 minutes a line. Until any time has been measured, that tile counts
+  turns instead.
+- **Activiteit** – reviews per day for 30 days: cards seen for the first time
+  on top, the rest below.
+- **Hoe sterk zitten je kaarten** – each active card by its FSRS stability,
+  the days until your chance of remembering it falls to 90%: **Nieuw** (never
+  studied), **Wankel** (under 7 days), **Groeit** (7 to 30), **Sterk** (30 or
+  more). Paused cards are left out. The limits are `SHAKY_BELOW_DAYS` and
+  `STRONG_FROM_DAYS` in `crates/core/src/stats.rs`.
+- **Vaardigheden** – the last 30 days of **Spreken** (how understandable you
+  were), **Schrijven** (letters right first time), **Luisteren** (cards known
+  in Luisteren), **Getest** (the share of reviews you spoke or wrote, the ones
+  the scheduler trusts in full) and **Gesprek** (the share of your lines you
+  spoke). Each says how often, and how many points it moved against the 30 days
+  before.
+
+Deleting a card keeps its reviews, so the days you practised it still count.
 
 ## Screens
 
 Every screen keeps its text short: tabs, buttons, column headings and counts
-carry the app's own icons, and hovering one shows what it means.
+carry the app's own icons, and hovering one shows what it means. `Ctrl+1` to
+`Ctrl+7` open the screens in order. In a narrow window only the open tab keeps
+its name.
 
 - **Oefenen** – study.
 - **Gesprek** – a conversation with Claude that becomes cards (above).
@@ -152,6 +191,8 @@ carry the app's own icons, and hovering one shows what it means.
   the topic). Duplicates are flagged.
 - **Kaarten** – search, edit, pause, reset or delete cards; see misses and
   how often you looked at the English. The filters show how many cards each holds.
+- **Voortgang** – your streak, today's queue and how strong your cards are
+  (above).
 - **Instellingen** – male or female voice, a microphone test, light/dark/system
   colours, new cards per day. The Microfoon section names the microphone the
   sound comes from (read from PipeWire with `pw-dump`: Bluetooth, USB or the
@@ -236,8 +277,9 @@ words right, while the female voices built from audiobook recordings (MLS) got
 - `crates/core/examples/` – `draft` (try the drafting prompt on a snippet),
   `talk` (try the conversation prompt: one answer per line on stdin) and
   `import` (add `Nederlands | English` lines from stdin).
-- `docs/` – the original plan, the clickable mockup, the study-panel plan and
-  the RustQualityLens review (`rustqualitylens-review.md`).
+- `docs/` – the original plan, the clickable mockup, the study-panel,
+  conversation and Voortgang plans, and the RustQualityLens review
+  (`rustqualitylens-review.md`).
 - `rqlens.toml` – configuration for [rust-quality-lens](../rust-quality-lens):
   `rqlens measure hotspots` and the other producers write their evidence to
   `target/analysis`.

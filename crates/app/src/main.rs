@@ -10,6 +10,7 @@ mod drafts;
 mod icons;
 mod logging;
 mod mic_test;
+mod progress;
 mod recorder;
 mod settings;
 mod speaking;
@@ -32,7 +33,7 @@ use gpui_kit::{
 use crate::app::{FlashcardsApp, Screen};
 
 /// Developer flags for screenshots and checks:
-/// `--screen <oefenen|gesprek|toevoegen|concepten|kaarten|instellingen>` opens that screen,
+/// `--screen <oefenen|gesprek|toevoegen|concepten|kaarten|voortgang|instellingen>` opens that screen,
 /// `--keys "space 3"` replays study shortcuts after start-up,
 /// `--appearance <systeem|licht|donker>` overrides the colours for this run only,
 /// `--recording <file.wav>` uses a WAV file instead of the microphone.

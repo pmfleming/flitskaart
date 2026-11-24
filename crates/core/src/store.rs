@@ -62,6 +62,14 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     cache_write INTEGER NOT NULL,
     output INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS talks (
+    id INTEGER PRIMARY KEY,
+    topic TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL,
+    lines INTEGER NOT NULL DEFAULT 0,
+    spoken INTEGER NOT NULL DEFAULT 0,
+    seconds REAL NOT NULL DEFAULT 0
+);
 ";
 
 /// Columns added after the first release, added to older deck files on open.
@@ -79,6 +87,8 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     // How well the learner wrote the card, if they did.
     ("reviews", "written_grade", "INTEGER"),
     ("reviews", "written_accuracy", "REAL"),
+    // How long the card was in front of the learner, for Voortgang.
+    ("reviews", "seconds", "REAL"),
 ];
 
 const CARD_COLUMNS: &str =
@@ -218,6 +228,9 @@ pub struct Review<'a> {
     pub mode: Mode,
     /// Whether they opened the meaning.
     pub peeked: bool,
+    /// How long the card was shown before the score; saved up to
+    /// [`MAX_REVIEW_SECONDS`](crate::stats::MAX_REVIEW_SECONDS).
+    pub seconds: Option<f64>,
 }
 
 /// What is waiting in today's session.
@@ -335,8 +348,8 @@ impl Store {
         )
     }
 
+    /// Removes a card. Its reviews stay, so the days it was practised still count.
     pub fn delete(&self, id: CardId) -> Result<()> {
-        self.exec("DELETE FROM reviews WHERE card_id = ?1", vec![Value::Integer(id)])?;
         self.exec("DELETE FROM cards WHERE id = ?1", vec![Value::Integer(id)])
     }
 
@@ -427,7 +440,7 @@ impl Store {
 
     /// Saves a review and reschedules the card. [`count`] decides how the review counts.
     pub fn record_review(&self, id: CardId, review: Review, scheduler: &Scheduler, now: DateTime<Utc>) -> Result<Card> {
-        let Review { own, speech, written, mode, peeked } = review;
+        let Review { own, speech, written, mode, peeked, seconds } = review;
         let card = self.card(id)?.ok_or_else(|| anyhow!("card {id} no longer exists"))?;
         // Reading aloud and writing are both tests; the weaker one counts.
         let tested = [speech.map(|s| s.grade), written.map(|w| w.grade)].into_iter().flatten().min();
@@ -450,8 +463,8 @@ impl Store {
             ],
         )?;
         self.exec(
-            "INSERT INTO reviews (card_id, grade, own_grade, speech_grade, speech_accuracy, heard, mode, peeked, reviewed_at, share, written_grade, written_accuracy)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO reviews (card_id, grade, own_grade, speech_grade, speech_accuracy, heard, mode, peeked, reviewed_at, share, written_grade, written_accuracy, seconds)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             vec![
                 Value::Integer(id),
                 Value::Integer(i64::from(counted.grade.number())),
@@ -465,6 +478,7 @@ impl Store {
                 Value::Real(counted.share),
                 written.map_or(Value::Null, |w| Value::Integer(i64::from(w.grade.number()))),
                 written.map_or(Value::Null, |w| Value::Real(f64::from(w.accuracy))),
+                seconds.map_or(Value::Null, |s| Value::Real(s.clamp(0.0, crate::stats::MAX_REVIEW_SECONDS))),
             ],
         )?;
         self.card(id)?.ok_or_else(|| anyhow!("card {id} disappeared"))
@@ -534,7 +548,12 @@ impl Store {
 
     // ---- plumbing ----
 
-    fn cards_where(&self, clause: &str, params: Vec<Value>) -> Result<Vec<Card>> {
+    /// The id the last insert gave its row.
+    pub(crate) fn last_id(&self) -> i64 {
+        self.conn.last_insert_rowid()
+    }
+
+    pub(crate) fn cards_where(&self, clause: &str, params: Vec<Value>) -> Result<Vec<Card>> {
         let sql = format!("SELECT {CARD_COLUMNS} FROM cards WHERE {clause}");
         self.rows(&sql, params)?.iter().map(|row| card_from_row(row)).collect()
     }
@@ -612,7 +631,7 @@ pub(crate) fn parse_stamp(value: &Value) -> Option<DateTime<Utc>> {
     }
 }
 
-fn start_of_local_day(now: DateTime<Utc>) -> DateTime<Utc> {
+pub(crate) fn start_of_local_day(now: DateTime<Utc>) -> DateTime<Utc> {
     let local = now.with_timezone(&Local).date_naive().and_time(NaiveTime::MIN);
     Local.from_local_datetime(&local).earliest().map_or(now, |t| t.with_timezone(&Utc))
 }
@@ -646,7 +665,7 @@ mod tests {
     }
 
     fn read(own: Grade, speech: Option<&Assessment>, peeked: bool) -> Review<'_> {
-        Review { own, speech, written: None, mode: Mode::Read, peeked }
+        Review { own, speech, written: None, mode: Mode::Read, peeked, seconds: None }
     }
 
     fn reviews(store: &Store, columns: &str) -> Vec<Vec<Value>> {

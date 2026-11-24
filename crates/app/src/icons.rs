@@ -26,8 +26,14 @@ icons! {
     drafts,
     /// Kaarten: a stack of cards seen from the side.
     deck,
+    /// Voortgang: three bars rising from a baseline.
+    progress,
     /// Instellingen: three sliders.
     sliders,
+
+    // Voortgang.
+    /// Dagen op rij: a flame.
+    flame,
 
     // Practising.
     /// Test mijn uitspraak, Spreek: a speech bubble with your voice inside it.

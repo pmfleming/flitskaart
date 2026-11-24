@@ -1,5 +1,6 @@
 //! Shared visual primitives and the app's Delft-blue light/dark palette.
 
+use chrono::{Datelike as _, NaiveDate};
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::tooltip::Tooltip;
@@ -329,6 +330,52 @@ pub fn stat(id: impl Into<ElementId>, icon: Icon, value: impl Into<SharedString>
         .text_color(cx.theme().muted_foreground)
         .child(icon.size_4())
         .child(value.into())
+}
+
+/// "24 nov".
+pub fn day_label(day: NaiveDate) -> String {
+    const MONTHS: [&str; 12] = ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"];
+    format!("{} {}", day.day(), MONTHS[day.month0() as usize])
+}
+
+/// A small square of colour, for a legend.
+pub fn dot(color: Hsla) -> Div {
+    div().flex_none().size(px(8.)).rounded(px(2.)).bg(color)
+}
+
+/// A bar per day, each split into parts stacked from the bottom in the order
+/// of `colors`, with the first and last day under it. `tip` says what a day's
+/// bar holds; `id` keeps the bars apart from any other chart.
+pub fn day_chart(
+    id: &'static str,
+    days: &[(NaiveDate, Vec<u64>)],
+    colors: &[Hsla],
+    height: f32,
+    tip: impl Fn(NaiveDate, &[u64]) -> String,
+    cx: &App,
+) -> Div {
+    let theme = cx.theme();
+    let highest = days.iter().map(|(_, parts)| parts.iter().sum::<u64>()).max().unwrap_or(0).max(1) as f32;
+    let bars = days.iter().enumerate().map(|(index, (day, parts))| {
+        let sum: u64 = parts.iter().sum();
+        let stacked = parts.iter().zip(colors).rev().filter(|(part, _)| **part > 0);
+        explained((id, index as u64), tip(*day, parts))
+            .flex_1()
+            .h_full()
+            .flex()
+            .flex_col()
+            .justify_end()
+            .rounded_t(px(2.))
+            .overflow_hidden()
+            .hover(|style| style.opacity(0.75))
+            .children(stacked.map(|(part, color)| div().w_full().h(px(height * *part as f32 / highest)).bg(*color)))
+            .when(sum == 0, |bar| bar.child(div().w_full().h(px(1.)).bg(theme.border)))
+    });
+    let (first, last) = (days.first().map(|(day, _)| *day), days.last().map(|(day, _)| *day));
+    v_flex()
+        .gap_1p5()
+        .child(h_flex().h(px(height)).items_end().gap(px(3.)).children(bars))
+        .child(h_flex().justify_between().text_xs().text_color(theme.muted_foreground).children(first.map(day_label)).children(last.map(day_label)))
 }
 
 /// A centred picture and message for empty screens, with optional detail.

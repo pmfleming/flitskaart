@@ -7,7 +7,9 @@ use std::ops::Range;
 use anyhow::Result;
 use dutch_flashcards_core::conversation::{self, Conversation, Line, Reply, Said, Search, Source, Who};
 use dutch_flashcards_core::drafting;
+use chrono::{DateTime, Utc};
 use dutch_flashcards_core::speech::{assess, missed_ranges, write_wav_16k};
+use dutch_flashcards_core::stats::Talk;
 use dutch_flashcards_core::voice::Speed;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -67,6 +69,12 @@ pub struct TalkState {
     pub scroll: ScrollHandle,
     /// Bumped for each new conversation, so a late answer can't land in the next one.
     ticket: u64,
+    /// What Voortgang keeps of this conversation, saved from the learner's first answered line.
+    record: Option<Talk>,
+    /// When the partner's latest line arrived, and how long the learner then
+    /// took to send their answer.
+    asked_at: Option<DateTime<Utc>>,
+    answered_in: Option<f64>,
     _entered: [Subscription; 2],
 }
 
@@ -111,6 +119,9 @@ impl TalkState {
             error: None,
             scroll: ScrollHandle::new(),
             ticket: 0,
+            record: None,
+            asked_at: None,
+            answered_in: None,
             _entered: entered,
         }
     }
@@ -156,6 +167,7 @@ impl FlashcardsApp {
         let (ticket, llm) = (self.talk.ticket, self.llm.clone());
         let current = Conversation::new(topic);
         let search = Search::options(&current.topic, previous.iter().map(|source| source.url.clone()).collect());
+        (self.talk.record, self.talk.asked_at) = (Some(Talk::new(&current.topic, Self::now())), None);
         self.talk.current = Some(current);
         (self.talk.options, self.talk.error) = (Vec::new(), None);
         if search.topic.is_empty() {
@@ -249,6 +261,10 @@ impl FlashcardsApp {
         let Some(current) = &self.talk.current else { return };
         let request = current.request(said.as_ref());
         let (llm, ticket) = (self.llm.clone(), self.talk.ticket);
+        if said.is_some() {
+            let since_asked = self.talk.asked_at.map(|asked| Self::now() - asked);
+            self.talk.answered_in = since_asked.map(|gap| gap.num_milliseconds() as f64 / 1000.0);
+        }
         (self.talk.pending, self.talk.thinking, self.talk.error) = (said, true, None);
         self.talk.scroll.scroll_to_bottom();
         let job = move || conversation::continue_turn(&llm, &request);
@@ -266,9 +282,14 @@ impl FlashcardsApp {
         match reply {
             Ok((reply, sources)) => {
                 let line = reply.reply.clone();
-                let finished = reply.finished && self.talk.pending.is_some();
+                let said = self.talk.pending.take();
+                let (finished, spoken) = (reply.finished && said.is_some(), said.as_ref().map(|said| said.spoken));
                 current.add_sources(sources);
-                current.add_turn(self.talk.pending.take(), reply);
+                current.add_turn(said, reply);
+                self.talk.asked_at = Some(Self::now());
+                if let Some(spoken) = spoken {
+                    self.keep_answered_line(spoken);
+                }
                 if finished {
                     return self.finish_conversation(cx);
                 }
@@ -281,6 +302,17 @@ impl FlashcardsApp {
                 self.talk.error = Some(crate::logging::error("gesprek", format!("{err:#}")).into());
             }
             Err(err) => self.talk.error = Some(crate::logging::error("gesprek", format!("{err:#}")).into()),
+        }
+    }
+
+    /// Counts an answered line towards Voortgang, so the conversation keeps
+    /// the streak even if it is never finished.
+    fn keep_answered_line(&mut self, spoken: bool) {
+        let seconds = self.talk.answered_in.take().unwrap_or(0.0);
+        let Some(record) = &mut self.talk.record else { return };
+        record.add_line(spoken, seconds);
+        if let Err(err) = self.store.save_talk(record) {
+            crate::logging::error("gesprek: voortgang", format!("{err:#}"));
         }
     }
 
@@ -456,6 +488,7 @@ impl FlashcardsApp {
     fn close_conversation(&mut self, cx: &mut Context<Self>) {
         self.talk.ticket += 1;
         (self.talk.current, self.talk.pending, self.talk.error) = (None, None, None);
+        (self.talk.record, self.talk.asked_at, self.talk.answered_in) = (None, None, None);
         (self.talk.researching, self.talk.thinking, self.talk.hearing, self.talk.refreshing) = (false, false, false, false);
         self.talk.options.clear();
         self.talk.capture.cancel();

@@ -1,4 +1,4 @@
-//! The window: a tab strip over six screens, sharing one deck.
+//! The window: a tab strip over seven screens, sharing one deck.
 
 use std::time::Duration;
 
@@ -6,6 +6,7 @@ use dutch_flashcards_core::Store;
 use dutch_flashcards_core::llm::{Cli, Llm, ModelChoice};
 use dutch_flashcards_core::paths::Paths;
 use dutch_flashcards_core::speech::Listener;
+use dutch_flashcards_core::stats::Progress;
 use dutch_flashcards_core::store::{Appearance, Settings};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::tab::{Tab, TabBar};
@@ -26,6 +27,9 @@ use crate::talk::TalkState;
 use crate::icons;
 use crate::ui::{apply_palette, icon_button, surface};
 
+/// Below this width the seven tab names don't fit side by side.
+const NARROW_WINDOW: f32 = 860.;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
     Study,
@@ -33,19 +37,21 @@ pub enum Screen {
     Add,
     Drafts,
     Deck,
+    Progress,
     Settings,
 }
 
 impl Screen {
-    pub const ALL: [Screen; 6] = [Screen::Study, Screen::Talk, Screen::Add, Screen::Drafts, Screen::Deck, Screen::Settings];
-    const LABELS: [&str; 6] = ["Oefenen", "Gesprek", "Toevoegen", "Concepten", "Kaarten", "Instellingen"];
+    pub const ALL: [Screen; 7] =
+        [Screen::Study, Screen::Talk, Screen::Add, Screen::Drafts, Screen::Deck, Screen::Progress, Screen::Settings];
+    const LABELS: [&str; 7] = ["Oefenen", "Gesprek", "Toevoegen", "Concepten", "Kaarten", "Voortgang", "Instellingen"];
 
     pub fn label(self) -> &'static str {
         Screen::LABELS[self as usize]
     }
 
     pub fn icon(self) -> Icon {
-        [icons::practice, icons::talk, icons::paste, icons::drafts, icons::deck, icons::sliders][self as usize]()
+        [icons::practice, icons::talk, icons::paste, icons::drafts, icons::deck, icons::progress, icons::sliders][self as usize]()
     }
 
     /// The screen with this label, ignoring case.
@@ -86,6 +92,8 @@ pub struct FlashcardsApp {
     pub add: AddState,
     pub drafts: Vec<DraftRow>,
     pub deck: DeckState,
+    /// What Voortgang shows, worked out each time it opens.
+    pub progress: Option<Progress>,
     pub notice: Option<Notice>,
     notice_ticket: u64,
     _appearance_changed: Subscription,
@@ -117,6 +125,7 @@ impl FlashcardsApp {
             add: AddState::new(window, cx),
             deck: DeckState::new(window, cx),
             drafts: Vec::new(),
+            progress: None,
             settings,
             store,
             paths,
@@ -142,6 +151,7 @@ impl FlashcardsApp {
         match screen {
             Screen::Study if self.study.card.is_none() => self.load_next_card(cx),
             Screen::Deck => self.reload_deck(),
+            Screen::Progress => self.reload_progress(),
             Screen::Settings => {
                 self.refresh_inputs(cx);
                 self.find_models_once(cx);
@@ -232,7 +242,7 @@ impl FlashcardsApp {
         chrono::Utc::now()
     }
 
-    /// Global shortcuts: Ctrl+1..6 (or Alt+1..6) switches directly to a screen.
+    /// Global shortcuts: Ctrl+1..7 (or Alt+1..7) switches directly to a screen.
     fn on_global_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let m = &event.keystroke.modifiers;
         let nav_mod = (m.control || m.alt || m.platform) && !m.shift && !event.is_held;
@@ -247,7 +257,8 @@ impl FlashcardsApp {
         }
     }
 
-    fn render_tabs(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The screens as tabs. In a narrow window only the open one keeps its name.
+    fn render_tabs(&mut self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = Screen::ALL.iter().position(|s| *s == self.screen).unwrap_or(0);
         let drafts = self.drafts.len();
         let waiting = self.study.counts.due + self.study.counts.new;
@@ -258,7 +269,11 @@ impl FlashcardsApp {
             .selected_index(selected)
             .on_click(cx.listener(|this, index: &usize, window, cx| this.show(Screen::ALL[*index], window, cx)))
             .children(Screen::ALL.map(|screen| {
-                let tab = Tab::new().label(screen.label()).prefix(screen.icon().size_4().mr_1p5());
+                let tab = if narrow && screen != self.screen {
+                    Tab::new().prefix(screen.icon().size_4())
+                } else {
+                    Tab::new().label(screen.label()).prefix(screen.icon().size_4().mr_1p5())
+                };
                 match screen {
                     Screen::Drafts if drafts > 0 => {
                         let (bg, fg) = if on_study {
@@ -320,12 +335,14 @@ impl Render for FlashcardsApp {
         if !used.is_empty() && let Err(err) = self.store.add_usage(&used, Self::now()) {
             crate::logging::error("verbruik", format!("{err:#}"));
         }
+        let narrow = window.viewport_size().width < px(NARROW_WINDOW);
         let body = match self.screen {
             Screen::Study => self.render_study(cx).into_any_element(),
             Screen::Talk => self.render_talk(cx).into_any_element(),
             Screen::Add => self.render_add(cx).into_any_element(),
             Screen::Drafts => self.render_drafts(cx).into_any_element(),
             Screen::Deck => self.render_deck(window, cx).into_any_element(),
+            Screen::Progress => self.render_progress(narrow, cx).into_any_element(),
             Screen::Settings => self.render_settings(cx).into_any_element(),
         };
         let theme = cx.theme();
@@ -334,7 +351,7 @@ impl Render for FlashcardsApp {
             .bg(theme.background)
             .text_color(theme.foreground)
             .on_key_down(cx.listener(Self::on_global_key))
-            .child(div().px_4().bg(theme.tab_bar).border_b_1().border_color(theme.border).child(self.render_tabs(cx)))
+            .child(div().px_4().bg(theme.tab_bar).border_b_1().border_color(theme.border).child(self.render_tabs(narrow, cx)))
             .child(div().flex_1().min_h_0().child(body))
             .children(self.render_notice(cx))
     }

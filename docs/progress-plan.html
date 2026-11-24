@@ -1,0 +1,290 @@
+<title>Voortgang Plan</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap">
+<style>
+  /* Layout: one reading column. The proposed screen sits near the top as a mock in the app's own colours; the rules, data and build order follow as text and tables. */
+  :root {
+    --bg: #f4f6fb;
+    --surface: #ffffff;
+    --fg: #121a2c;
+    --muted: #56617b;
+    --line: #d4dbe9;
+    --track: #e9eef7;
+    --accent: #1d3f9e;        /* Delft blue, the app's primary */
+    --accent-soft: #e2e9fa;
+    --weak: #a6630c;          /* the app's warning */
+    --strong: #1f7a4d;        /* the app's success */
+    --flame: #c2570c;
+    --font-display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+    --font-body: "Inter", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1420; --surface: #171f30; --fg: #e9edf7; --muted: #97a5c2; --line: #2a354d; --track: #1f283d;
+      --accent: #7ba0f4; --accent-soft: #1d2b4d; --weak: #e4b24e; --strong: #62c994; --flame: #f0a35c;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1420; --surface: #171f30; --fg: #e9edf7; --muted: #97a5c2; --line: #2a354d; --track: #1f283d;
+    --accent: #7ba0f4; --accent-soft: #1d2b4d; --weak: #e4b24e; --strong: #62c994; --flame: #f0a35c;
+    color-scheme: dark;
+  }
+
+  body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 16px; line-height: 1.6; }
+  .page {
+    max-width: 780px; margin: 0 auto; padding-block: 48px 72px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; flex-direction: column; gap: 44px;
+  }
+  section, header { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.2; }
+  h1 { font-size: 2.1rem; font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; font-weight: 600; padding-top: 20px; border-top: 1px solid var(--line); }
+  p, ul, ol { margin: 0; }
+  p, li { max-width: 68ch; }
+  ul, ol { padding-left: 1.25em; display: flex; flex-direction: column; gap: 8px; }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  .lede { font-size: 1.1rem; color: var(--muted); max-width: 62ch; }
+  .eyebrow { font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+  .caption { font-size: 0.86rem; color: var(--muted); }
+  code { font-family: var(--font-mono); font-size: 0.86em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+  .icon { width: 1.25em; height: 1.25em; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* tables */
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--line); }
+  th { font-family: var(--font-mono); font-size: 0.72rem; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+  .yes { color: var(--strong); font-weight: 600; }
+  .no { color: var(--muted); }
+
+  /* the proposed screen, as a mock */
+  .app { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); min-width: 0; }
+  .tabs { display: flex; gap: 2px; padding: 0 12px; background: var(--surface); border-bottom: 1px solid var(--line); overflow-x: auto; font-size: 0.84rem; color: var(--muted); }
+  .tabs span { padding: 9px 9px 8px; border-bottom: 2px solid transparent; white-space: nowrap; }
+  .tabs .on { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent); }
+  .screen { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .box { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .box-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-weight: 600; font-size: 0.95rem; }
+  .box-title small { font-weight: 400; font-size: 0.8rem; color: var(--muted); }
+  .hero { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 12px; }
+  .streak { display: flex; align-items: center; gap: 12px; }
+  .streak .icon { width: 44px; height: 44px; color: var(--flame); stroke-width: 1.5; }
+  .big { font-family: var(--font-display); font-size: 2.3rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+  .sub { font-size: 0.82rem; color: var(--muted); }
+  .week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; text-align: center; font-size: 0.72rem; color: var(--muted); }
+  .day { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .dot { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--surface); }
+  .dot .icon { width: 14px; height: 14px; stroke-width: 2.5; }
+  .day.today .dot { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .day.today { color: var(--fg); font-weight: 600; }
+  .today-box { align-items: center; text-align: center; justify-content: center; }
+  .ring { width: 92px; height: 92px; }
+  .ring text { font-family: var(--font-display); font-weight: 700; font-size: 22px; fill: var(--fg); }
+  .go { font: inherit; font-size: 0.84rem; font-weight: 600; color: var(--surface); background: var(--accent); border: 0; border-radius: 7px; padding: 6px 14px; }
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .tile { gap: 2px; padding: 12px 14px; }
+  .tile b { font-family: var(--font-display); font-size: 1.5rem; font-weight: 600; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .bars { display: flex; align-items: flex-end; gap: 3px; height: 100px; border-bottom: 1px solid var(--line); }
+  .bar { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; border-radius: 2px 2px 0 0; overflow: hidden; }
+  .bar i { display: block; }
+  .bar .n { height: calc(var(--n) * 2.8px); background: var(--strong); }
+  .bar .r { height: calc(var(--r) * 2.8px); background: var(--accent); }
+  .axis { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--muted); }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 0.78rem; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .sw { width: 8px; height: 8px; border-radius: 2px; flex: none; background: var(--c); }
+  .strength { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: var(--track); }
+  .strength i { display: block; flex: var(--w) 0 0; background: var(--c); }
+  .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .skill { display: grid; grid-template-columns: 5.2rem minmax(0, 1fr) 2.8rem; align-items: center; gap: 10px; font-size: 0.86rem; }
+  .skill .meter { height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; }
+  .skill .meter i { display: block; height: 100%; width: var(--p); background: var(--accent); border-radius: 999px; }
+  .skill b { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .skill small { grid-column: 2 / -1; margin-top: -8px; font-size: 0.74rem; color: var(--muted); }
+  @media (max-width: 560px) {
+    .hero, .pair { grid-template-columns: minmax(0, 1fr); }
+    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    h1 { font-size: 1.7rem; }
+    td:first-child { white-space: normal; }
+  }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-flame" viewBox="0 0 24 24"><path fill="none" d="M12 3c.6 3.2 4.5 5 4.5 9.6a4.5 4.5 0 0 1-9 0c0-1.7.7-3 1.7-4 .1 1.6.8 2.5 1.6 2.8C10.3 8.600 10.800 5.500 12 3z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" d="M5 12.5l4.5 4.500L19 7.500"/></symbol>
+</svg>
+
+<div class="page">
+  <header>
+    <span class="eyebrow">Plan · new screen</span>
+    <h1>Voortgang: a statistics page for the learner</h1>
+    <p class="lede">A seventh tab that answers three questions at a glance: did I practise today, am I keeping it up, and is my Dutch getting stronger. It takes the habit view from Duolingo and Babbel and fills it with what this app already measures on every card.</p>
+  </header>
+
+  <section>
+    <h2>The screen</h2>
+    <div class="app" role="img" aria-label="Mock of the Voortgang screen with example figures: a 12-day streak, 14 of 22 cards done today, 148 cards learned, a 30-day activity chart, cards per strength and four skills.">
+      <div class="tabs"><span>Oefenen</span><span>Gesprek</span><span>Toevoegen</span><span>Concepten</span><span>Kaarten</span><span class="on">Voortgang</span><span>Instellingen</span></div>
+      <div class="screen">
+        <div class="hero">
+          <div class="box">
+            <div class="streak">
+              <svg class="icon"><use href="#i-flame"/></svg>
+              <div><div class="big">12</div><div class="sub">dagen op rij · langste reeks 14</div></div>
+            </div>
+            <div class="week">
+              <div class="day"><span class="dot"><svg class="icon"><use href="#i-check"/></svg></span>wo</div>
+              <div class="day"><span class="dot"><svg class="icon"><use href="#i-check"/></svg></span>do</div>
+              <div class="day"><span class="dot"><svg class="icon"><use href="#i-check"/></svg></span>vr</div>
+              <div class="day"><span class="dot"><svg class="icon"><use href="#i-check"/></svg></span>za</div>
+              <div class="day"><span class="dot"><svg class="icon"><use href="#i-check"/></svg></span>zo</div>
+              <div class="day"><span class="dot"><svg class="icon"><use href="#i-check"/></svg></span>ma</div>
+              <div class="day today"><span class="dot"><svg class="icon"><use href="#i-check"/></svg></span>di</div>
+            </div>
+          </div>
+          <div class="box today-box">
+            <svg class="ring" viewBox="0 0 92 92">
+              <circle cx="46" cy="46" r="38" fill="none" stroke="var(--track)" stroke-width="8"/>
+              <circle cx="46" cy="46" r="38" fill="none" stroke="var(--accent)" stroke-width="8" stroke-linecap="round" stroke-dasharray="151.9 238.8" transform="rotate(-90 46 46)"/>
+              <text x="46" y="54" text-anchor="middle">14</text>
+            </svg>
+            <div class="sub">van 22 kaarten vandaag · 8 wachten</div>
+            <span class="go">Oefenen</span>
+          </div>
+        </div>
+
+        <div class="tiles">
+          <div class="box tile"><b>148</b><span class="sub">kaarten geleerd</span></div>
+          <div class="box tile"><b>34</b><span class="sub">zitten er sterk in</span></div>
+          <div class="box tile"><b>88%</b><span class="sub">onthouden</span></div>
+          <div class="box tile"><b>670</b><span class="sub">beurten in 30 dagen</span></div>
+        </div>
+
+        <div class="box">
+          <div class="box-title">Activiteit <small>laatste 30 dagen · hoogste dag 34</small></div>
+          <div class="bars">
+            <div class="bar" style="--r:0;--n:0"></div><div class="bar" style="--r:0;--n:0"></div>
+            <div class="bar" style="--r:6;--n:10"><i class="n"></i><i class="r"></i></div><div class="bar" style="--r:12;--n:10"><i class="n"></i><i class="r"></i></div>
+            <div class="bar" style="--r:15;--n:8"><i class="n"></i><i class="r"></i></div><div class="bar" style="--r:18;--n:10"><i class="n"></i><i class="r"></i></div>
+            <div class="bar" style="--r:14;--n:6"><i class="n"></i><i class="r"></i></div><div class="bar" style="--r:20;--n:10"><i class="n"></i><i class="r"></i></div>
+            <div class="bar" style="--r:22;--n:8"><i class="n"></i><i class="r"></i></div><div class="bar" style="--r:16;--n:4"><i class="n"></i><i class="r"></i></div>
+            <div class="bar" style="--r:24;--n:10"><i class="n"></i><i class="r"></i></div><div class="bar" style="--r:19;--n:6"><i class="n"></i><i class="r"></i></div>
+            <div class="bar" style="--r:21;--n:5"><i class="n"></i><i class="r"></i></div><div class="bar" style="--r:26;--n:8"><i class="n"></i><i class="r"></i></div>
+            <div class="bar" style="--r:17;--n:4"><i class="n"></i><i class="r"></i></div><div class="bar" style="--r:12;--n:2"><i class="n"></i><i class="r"></i></div>
+            <div class="bar" style="--r:0;--n:0"></div><div class="bar" style="--r:0;--n:0"></div>
+            <div class="bar" style="--r:30;--n:4"><i class="n"></i><i class="r"></i></div><div class="bar" style="--r:24;--n:6"><i class="n"></i><i class="r"></i></div>
+            <div class="bar" style="--r:22;--n:5"><i class="n"></i><i class="r"></i></div><div class="bar" style="--r:27;--n:3"><i class="n"></i><i class="r"></i></div>
+            <div class="bar" style="--r:20;--n:4"><i class="n"></i><i class="r"></i></div><div class="bar" style="--r:25;--n:6"><i class="n"></i><i class="r"></i></div>
+            <div class="bar" style="--r:23;--n:2"><i class="n"></i><i class="r"></i></div><div class="bar" style="--r:28;--n:5"><i class="n"></i><i class="r"></i></div>
+            <div class="bar" style="--r:19;--n:3"><i class="n"></i><i class="r"></i></div><div class="bar" style="--r:24;--n:4"><i class="n"></i><i class="r"></i></div>
+            <div class="bar" style="--r:26;--n:3"><i class="n"></i><i class="r"></i></div><div class="bar" style="--r:12;--n:2"><i class="n"></i><i class="r"></i></div>
+          </div>
+          <div class="axis"><span>26 okt</span><span>24 nov</span></div>
+          <div class="legend"><span><i class="sw" style="--c:var(--accent)"></i>herhaald</span><span><i class="sw" style="--c:var(--strong)"></i>nieuw geleerd</span></div>
+        </div>
+
+        <div class="pair">
+          <div class="box">
+            <div class="box-title">Hoe sterk zitten je kaarten <small>186 kaarten</small></div>
+            <div class="strength">
+              <i style="--w:38;--c:var(--line)"></i><i style="--w:46;--c:var(--weak)"></i><i style="--w:68;--c:var(--accent)"></i><i style="--w:34;--c:var(--strong)"></i>
+            </div>
+            <div class="legend">
+              <span><i class="sw" style="--c:var(--line)"></i>Nieuw <b>38</b></span>
+              <span><i class="sw" style="--c:var(--weak)"></i>Wankel <b>46</b></span>
+              <span><i class="sw" style="--c:var(--accent)"></i>Groeit <b>68</b></span>
+              <span><i class="sw" style="--c:var(--strong)"></i>Sterk <b>34</b></span>
+            </div>
+          </div>
+          <div class="box">
+            <div class="box-title">Vaardigheden <small>laatste 30 dagen</small></div>
+            <div class="skill"><span>Spreken</span><span class="meter"><i style="--p:84%"></i></span><b>84%</b><small>verstaanbaar · 231 keer · 3 punten beter</small></div>
+            <div class="skill"><span>Schrijven</span><span class="meter"><i style="--p:91%"></i></span><b>91%</b><small>letters goed · 64 keer</small></div>
+            <div class="skill"><span>Luisteren</span><span class="meter"><i style="--p:86%"></i></span><b>86%</b><small>geweten · 118 keer</small></div>
+            <div class="skill"><span>Getest</span><span class="meter"><i style="--p:58%"></i></span><b>58%</b><small>van je beurten gesproken of geschreven</small></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="caption">Example figures for a deck about a month old, not yours. The two empty days in the chart are where the earlier 14-day run ended.</p>
+  </section>
+
+  <section>
+    <h2>What comes from Duolingo and Babbel</h2>
+    <p>Both apps build their progress pages around the habit first and the learning second. This app has no server, no other learners and a calm look, so it keeps the habit view and drops the game around it.</p>
+    <div class="scroll">
+      <table>
+        <tr><th>Pattern</th><th>Where it comes from</th><th>Here</th></tr>
+        <tr><td>Streak with a flame</td><td>Both. Babbel counts any completed activity towards it.</td><td><span class="yes">Yes.</span> Days in a row with a scored card, and the longest run so a broken streak isn’t a total loss.</td></tr>
+        <tr><td>The week at a glance</td><td>Babbel’s My Activity, Duolingo’s week row</td><td><span class="yes">Yes.</span> The last seven days, today on the right.</td></tr>
+        <tr><td>A goal for today</td><td>Duolingo’s daily goal, Babbel’s “Your goal”</td><td><span class="yes">Yes, without a new setting.</span> The goal is to empty today’s queue, the same finish line as Alles gedaan.</td></tr>
+        <tr><td>Totals</td><td>Duolingo’s total XP; Babbel’s lessons completed and time learned</td><td><span class="yes">Yes, in real units.</span> Cards learned and turns taken. Minutes come in step 3.</td></tr>
+        <tr><td>Skills</td><td>Duolingo’s year in review breaks practice down by kind</td><td><span class="yes">Yes.</span> Speaking, writing and listening are already graded on every review.</td></tr>
+        <tr><td>How well words are known</td><td>Review features in both</td><td><span class="yes">Yes.</span> Four levels read from FSRS, which is more precise than either app shows.</td></tr>
+        <tr><td>XP, leagues, friends</td><td>Duolingo</td><td><span class="no">No.</span> Nobody to compare with, and XP would be an invented currency next to honest counts.</td></tr>
+        <tr><td>Streak freeze</td><td>Both; Babbel gives two a week</td><td><span class="no">Not at first.</span> See the decisions below.</td></tr>
+        <tr><td>Badges and milestones</td><td>Duolingo</td><td><span class="no">Later, if wanted.</span> A quiet line at 7, 30 and 100 days would be enough.</td></tr>
+      </table>
+    </div>
+    <p class="caption">Sources: <a href="https://blog.duolingo.com/duolingo-101-how-to-learn-a-language-on-duolingo">Duolingo 101</a>, <a href="https://blog.duolingo.com/duolingo-leagues-leaderboards/">Duolingo on leagues</a>, <a href="https://blog.duolingo.com/achievement-badges">Duolingo on badges</a>, <a href="https://www.babbel.com/en/magazine/build-a-language-habit">Babbel on building a habit</a>, <a href="https://support.babbel.com/hc/en-gb/articles/25075048448274--New-app-interface">Babbel’s app interface</a>.</p>
+  </section>
+
+  <section>
+    <h2>What each number means</h2>
+    <p>Every figure is worked out from the <code>reviews</code> and <code>cards</code> tables as they are today. A day is a local calendar day, the same boundary the daily limit for new cards already uses.</p>
+    <div class="scroll">
+      <table>
+        <tr><th>Figure</th><th>Rule</th></tr>
+        <tr><td>Practised day</td><td>At least one saved review. Overslaan saves nothing, so it doesn’t count.</td></tr>
+        <tr><td>Reeks</td><td>The run of practised days ending today. Before today’s first card it shows the run ending yesterday with the flame in outline, because the streak is still alive until midnight.</td></tr>
+        <tr><td>Vandaag</td><td>Cards scored today that aren’t due again right now, out of those plus what <code>Store::counts</code> says is waiting. A full ring is Alles gedaan.</td></tr>
+        <tr><td>Kaarten geleerd</td><td>Active cards studied at least once.</td></tr>
+        <tr><td>Nieuw, Wankel, Groeit, Sterk</td><td>Never studied; then by FSRS stability, the number of days until the chance of recall falls to 90%: under 7, 7 to 30, and 30 or more. Paused cards are left out and counted beside the bar.</td></tr>
+        <tr><td>Onthouden</td><td>Of the reviews in the last 30 days that came at least a day after the card’s previous one, the share not scored Weet ik niet. Learning steps minutes apart are left out. The learner’s own score is used, since an unclear pronunciation is not forgetting. Under 10 such reviews it shows a dash.</td></tr>
+        <tr><td>Spreken, Schrijven</td><td>The average <code>speech_accuracy</code> and <code>written_accuracy</code> over the last 30 days, with how often, and the change against the 30 days before.</td></tr>
+        <tr><td>Luisteren</td><td>Reviews done in Luisteren and the share known.</td></tr>
+        <tr><td>Getest</td><td>The share of reviews backed by speaking or writing. These are the reviews the scheduler trusts in full, so the number rewards the better way to practise.</td></tr>
+        <tr><td>Activiteit</td><td>Reviews per day for 30 days, split into a card’s first review ever and the rest.</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>What the deck doesn’t record yet</h2>
+    <ul>
+      <li><b>Deleting a card deletes its reviews.</b> <code>Store::delete</code> removes them, so deleting a card would erase practised days and could break a streak after the fact. The reviews should stay: nothing else reads them, and the strength figures look at cards only.</li>
+      <li><b>“Vandaag geoefend” forgets on restart.</b> <code>study.reviewed_today</code> lives in memory, so Oefenen’s header and the rest screen start again at zero when the app reopens. They should read the same count as Voortgang.</li>
+      <li><b>Time isn’t measured.</b> Both apps show minutes learned. A review only has the moment it was saved.</li>
+      <li><b>A conversation leaves no trace</b> unless cards are made from it. Gesprek can’t count towards the streak or show up as a skill until it does.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Build order</h2>
+    <ol>
+      <li><b>The numbers, in the core crate.</b> A new <code>crates/core/src/stats.rs</code> shaped like <code>usage.rs</code>: a pure <code>summarize(reviews, cards, now)</code> that returns one <code>Progress</code> value, and <code>Store::progress(now)</code> that loads the rows for it. Tests feed it fixed rows: a run broken by a missed day, a day that crosses local midnight, learning steps left out of Onthouden, a card on each side of the 7 and 30 day limits. The limits are named constants beside the rule, as <code>SCORE_ONLY_SHARE</code> is. <code>Store::delete</code> stops removing reviews.</li>
+      <li><b>The screen.</b> <code>Screen::Progress</code> joins <code>Screen::ALL</code> as “Voortgang”, before Instellingen, so Ctrl+6 opens it and <code>--screen voortgang</code> works for screenshots. A new <code>crates/app/src/progress.rs</code> draws it from a <code>Progress</code> loaded in <code>show()</code>, the way Kaarten reloads there, and not on every frame. The day chart, <code>day_label</code> and the legend dot move from <code>llm_settings.rs</code> to <code>ui.rs</code> so Verbruik and Voortgang share them. Two icons join the set: rising bars for the tab and a flame. An empty deck gets the usual empty state pointing to Gesprek and Toevoegen.</li>
+      <li><b>The streak where it is earned.</b> The Alles gedaan card gains the flame and “12 dagen” among its stats, and Oefenen’s header and that card read today’s count from the store. The window test practises a card, opens Voortgang and checks a streak of one. README gets a Voortgang section.</li>
+      <li><b>Time and Gesprek.</b> A <code>seconds</code> column on <code>reviews</code>, from the card appearing to its score and capped at two minutes, gives “minuten geoefend” from that day on. A small <code>talks</code> table with one row per conversation (start, topic, the learner’s lines, how many were spoken) lets a conversation count as a practised day and adds a Gesprek row to Vaardigheden.</li>
+      <li><b>Later, if the page earns it.</b> A week ahead of cards falling due, the cards missed most often with a way to open them in Kaarten, and milestones.</li>
+    </ol>
+    <p>Steps 1 to 3 need no change to the deck file. Step 4 adds a column and a table through the existing <code>ADDED_COLUMNS</code> path, so older decks open as before.</p>
+  </section>
+
+  <section>
+    <h2>Decisions to confirm</h2>
+    <ul>
+      <li><b>Name and place.</b> “Voortgang” as the sixth tab. Instellingen moves from Ctrl+6 to Ctrl+7. Seven tabs need a check at the 560-pixel minimum width.</li>
+      <li><b>What keeps a streak.</b> One scored card. No freeze: the longest run stays on show, and a rest day that silently doesn’t count is harder to explain than a streak that restarts.</li>
+      <li><b>The strength limits.</b> 7 and 30 days. They decide how soon “Sterk” starts to fill, and can move without touching saved data.</li>
+      <li><b>Whether step 4 is wanted.</b> It is the only part that changes what the deck stores.</li>
+    </ul>
+  </section>
+</div>

@@ -1,7 +1,6 @@
 //! Instellingen: which logged-in tool and model answers and how much it
 //! thinks, and how many tokens the app has used, per model and per day.
 
-use chrono::{Datelike as _, NaiveDate};
 use dutch_flashcards_core::llm::{Cli, Effort, ModelChoice, model_name};
 use dutch_flashcards_core::usage::{UsageSummary, UsageTotal};
 use gpui_kit::component::{ActiveTheme as _, Colorize as _, Icon, h_flex, v_flex};
@@ -14,7 +13,7 @@ use gpui_kit::{
 
 use crate::app::FlashcardsApp;
 use crate::icons;
-use crate::ui::{explained, hint, icon_button, section, segment_button, segmented_bar};
+use crate::ui::{day_chart, day_label, dot, explained, hint, icon_button, section, segment_button, segmented_bar};
 
 /// How many days the chart shows.
 const CHART_DAYS: usize = 30;
@@ -156,41 +155,12 @@ impl FlashcardsApp {
 
     /// Tokens per day for the last days, each bar split by model.
     fn render_chart(&self, summary: &UsageSummary, cx: &App) -> Div {
-        let theme = cx.theme();
         let colors: Vec<Hsla> = (0..summary.by_model.len()).map(|index| color_at(index, cx)).collect();
-        let highest = summary.daily.iter().map(|(_, tokens)| tokens.iter().sum::<u64>()).max().unwrap_or(0).max(1) as f32;
-        let bars = summary.daily.iter().enumerate().map(|(index, (day, per_model))| {
-            let sum: u64 = per_model.iter().sum();
-            let tip = format!("{}: {} tokens", day_label(*day), compact(sum));
-            let parts = per_model.iter().zip(&colors).rev().filter(|(tokens, _)| **tokens > 0);
-            explained(("chart-day", index as u64), tip)
-                .flex_1()
-                .h_full()
-                .flex()
-                .flex_col()
-                .justify_end()
-                .rounded_t(px(2.))
-                .overflow_hidden()
-                .hover(|style| style.opacity(0.75))
-                .children(parts.map(|(tokens, color)| div().w_full().h(px(CHART_HEIGHT * *tokens as f32 / highest)).bg(*color)))
-                .when(sum == 0, |bar| bar.child(div().w_full().h(px(1.)).bg(theme.border)))
-        });
-        let (first, last) = (summary.daily.first().map(|(day, _)| *day), summary.daily.last().map(|(day, _)| *day));
         let legend = h_flex().flex_wrap().gap_3().children(summary.by_model.iter().zip(&colors).map(|((model, _), color)| {
             h_flex().items_center().gap_1p5().child(dot(*color)).child(hint(model_name(model), cx).text_xs())
         }));
-        v_flex()
-            .gap_1p5()
-            .child(h_flex().h(px(CHART_HEIGHT)).items_end().gap(px(3.)).children(bars))
-            .child(
-                h_flex()
-                    .justify_between()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .children(first.map(day_label))
-                    .children(last.map(day_label)),
-            )
-            .child(legend)
+        let tip = |day, tokens: &[u64]| format!("{}: {} tokens", day_label(day), compact(tokens.iter().sum()));
+        day_chart("chart-day", &summary.daily, &colors, CHART_HEIGHT, tip, cx).child(legend)
     }
 
     /// Per model or per day: answers, share of the tokens and tokens.
@@ -297,10 +267,6 @@ fn render_kinds(total: &UsageTotal, cx: &App) -> Div {
     v_flex().gap_2().child(bar).child(legend)
 }
 
-fn dot(color: Hsla) -> Div {
-    div().flex_none().size(px(8.)).rounded(px(2.)).bg(color)
-}
-
 /// The colour of the `index`th model in the chart, the bars and the legend.
 fn color_at(index: usize, cx: &App) -> Hsla {
     let theme = cx.theme();
@@ -318,12 +284,6 @@ pub fn compact(count: u64) -> String {
     };
     let decimals = if value < 10.0 { 2 } else if value < 100.0 { 1 } else { 0 };
     format!("{value:.decimals$}{unit}").replace('.', ",")
-}
-
-/// "24 nov".
-fn day_label(day: NaiveDate) -> String {
-    const MONTHS: [&str; 12] = ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"];
-    format!("{} {}", day.day(), MONTHS[day.month0() as usize])
 }
 
 #[cfg(test)]
