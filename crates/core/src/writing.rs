@@ -2,10 +2,19 @@
 //! by letter. Spaces and punctuation are given; only letters and digits are
 //! typed. Every key fills the next blank, right or wrong, so the learner may go
 //! back (Backspace) to fix a wrong letter, or carry on and finish to see the
-//! sentence corrected. The grade counts the letters right at the first try.
+//! sentence corrected. The grade counts the letters right at the first try,
+//! and a letter fixed by the learner as half right. It only suggests a score.
 
 use crate::model::Grade;
-use crate::speech::grade_for;
+
+/// The lowest accuracy for each grade above Weet ik niet. Looser than for
+/// speaking: one slip in a short sentence costs many points.
+const GRADE_FLOORS: [(f32, Grade); 3] = [(0.90, Grade::Easy), (0.75, Grade::Comfortable), (0.50, Grade::Hard)];
+
+/// The grade for a writing's accuracy (0.0–1.0).
+pub fn grade_for(accuracy: f32) -> Grade {
+    GRADE_FLOORS.iter().find(|(floor, _)| accuracy >= *floor).map_or(Grade::DontKnow, |(_, grade)| *grade)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {
@@ -138,8 +147,12 @@ impl Writing {
             return None;
         }
         let letters = self.cells.iter().filter(|(_, slot, _, _)| *slot != Slot::Given).count();
-        let right = self.cells.iter().filter(|(_, slot, _, _)| *slot == Slot::Right).count();
-        let accuracy = if letters == 0 { 1.0 } else { right as f32 / letters as f32 };
+        let points: f32 = self.cells.iter().map(|(_, slot, _, _)| match slot {
+            Slot::Right => 1.0,
+            Slot::Fixed => 0.5,
+            _ => 0.0,
+        }).sum();
+        let accuracy = if letters == 0 { 1.0 } else { points / letters as f32 };
         Some(Written { accuracy, grade: grade_for(accuracy) })
     }
 }
@@ -197,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn going_back_fixes_a_letter_but_the_grade_remembers() {
+    fn going_back_fixes_a_letter_and_it_counts_half() {
         let mut writing = Writing::new("ik");
         type_all(&mut writing, "x");
         assert!(writing.back());
@@ -205,7 +218,7 @@ mod tests {
         type_all(&mut writing, "ik");
         assert_eq!(slots(&writing), [Slot::Fixed, Slot::Right]);
         assert!(writing.is_done());
-        assert_eq!(writing.result().unwrap().accuracy, 0.5);
+        assert_eq!(writing.result().unwrap().accuracy, 0.75);
         assert!(!writing.back(), "a finished writing stays finished");
     }
 
@@ -216,5 +229,17 @@ mod tests {
         writing.finish();
         assert_eq!(slots(&writing), [Slot::Right, Slot::Shown, Slot::Given, Slot::Shown, Slot::Shown, Slot::Shown]);
         assert_eq!(writing.result().unwrap().grade, Grade::DontKnow);
+    }
+
+    #[test]
+    fn one_slip_in_a_sentence_still_goes_well() {
+        // 23 letters, one wrong and left: 96%.
+        let mut writing = Writing::new("Ik heb kaas gekocht vandaag");
+        type_all(&mut writing, "Ik heb kaas gekocht vandaax");
+        writing.finish();
+        assert_eq!(writing.result().unwrap().grade, Grade::Easy);
+        let grades = [0.95, 0.9, 0.8, 0.75, 0.6, 0.5, 0.4].map(super::grade_for);
+        use Grade::{Comfortable, DontKnow, Easy, Hard};
+        assert_eq!(grades, [Easy, Easy, Comfortable, Comfortable, Hard, Hard, DontKnow]);
     }
 }

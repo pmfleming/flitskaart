@@ -1,8 +1,8 @@
 //! Spaced repetition with FSRS, the scheduler modern Anki uses.
 //!
-//! On top of FSRS, what the learner did before scoring decides how far their
-//! score is trusted: reading the card aloud backs it up, scoring alone counts
-//! for less, and opening the meaning counts against it.
+//! The learner's own score always schedules the card. Reading aloud, writing
+//! and opening the meaning only shape the score the app suggests; whether the
+//! learner tested the card decides how far their score is trusted.
 
 use chrono::{DateTime, Duration, Utc};
 use rs_fsrs::{FSRS, Parameters, Seed, State};
@@ -22,28 +22,35 @@ pub struct Counted {
     pub share: f64,
 }
 
+/// The weaker of the two tests, reading aloud and writing, of those taken.
+pub fn weaker_test(speech: Option<Grade>, written: Option<Grade>) -> Option<Grade> {
+    [speech, written].into_iter().flatten().min()
+}
+
+/// The score the app suggests: the weaker test, and Moeilijk at best once
+/// the meaning was opened. `None` when there is nothing to go on.
+pub fn suggest(tested: Option<Grade>, peeked: bool) -> Option<Grade> {
+    let cap = if peeked { Grade::Hard } else { Grade::Easy };
+    match tested {
+        Some(tested) => Some(tested.min(cap)),
+        None => peeked.then_some(cap),
+    }
+}
+
 /// Turns the learner's own score into how the review counts.
 ///
-/// - Their own score is the starting point.
-/// - A test grade below it (reading aloud or writing, the weaker one) replaces it.
-/// - Opening the meaning caps it at Moeilijk and stops the pause from growing.
+/// - Their own score is final: the tests only suggest one.
+/// - A score after a test (reading aloud or writing) counts in full, whatever
+///   the test showed. Luisteren plays the sentence first, so its scores count
+///   in full too.
 /// - In Lezen, a score without a test keeps only part of the growth.
-///   Luisteren plays the sentence first, so its scores count in full.
 /// - "Weet ik niet" always counts in full: nobody claims a miss by accident.
-pub fn count(own: Grade, tested: Option<Grade>, peeked: bool, mode: Mode) -> Counted {
-    if own == Grade::DontKnow {
-        return Counted { grade: own, share: 1.0 };
-    }
-    let grade = tested.map_or(own, |tested| tested.min(own));
-    if peeked {
-        return Counted { grade: grade.min(Grade::Hard), share: 0.0 };
-    }
-    let backed_up = tested.is_some() || mode == Mode::Listen;
-    Counted { grade, share: if backed_up { 1.0 } else { SCORE_ONLY_SHARE } }
+pub fn count(own: Grade, tested: bool, mode: Mode) -> Counted {
+    let backed_up = own == Grade::DontKnow || tested || mode == Mode::Listen;
+    Counted { grade: own, share: if backed_up { 1.0 } else { SCORE_ONLY_SHARE } }
 }
 
 pub struct Scheduler {
-    fsrs: FSRS,
     parameters: Parameters,
 }
 
@@ -57,8 +64,7 @@ impl Scheduler {
     /// Short-term steps make "Weet ik niet" bring the card back within minutes.
     /// Fuzz spreads cards learned on the same day so they don't all fall due together.
     fn new(fuzz: bool) -> Self {
-        let parameters = Parameters { enable_short_term: true, enable_fuzz: fuzz, ..Parameters::default() };
-        Scheduler { fsrs: FSRS::new(parameters.clone()), parameters }
+        Scheduler { parameters: Parameters { enable_short_term: true, enable_fuzz: fuzz, ..Parameters::default() } }
     }
 
     /// Without fuzz, so tests get the same pauses every run.
@@ -73,25 +79,37 @@ impl Scheduler {
     /// less than full trust and the stability would grow, the card keeps only
     /// `share` of the growth, and the pause is worked out again from that.
     pub fn apply(&self, card: &rs_fsrs::Card, now: DateTime<Utc>, counted: Counted) -> rs_fsrs::Card {
-        let mut next = self.fsrs.next(card.clone(), now, counted.grade.rating()).card;
-        let gain = next.stability - card.stability;
-        // A new card has no stability to grow from yet.
-        if counted.share >= 1.0 || card.state == State::New || gain <= 0.0 {
-            return next;
-        }
-        next.stability = card.stability + counted.share.max(0.0) * gain;
-        // Learning steps are minutes long and stay as FSRS set them.
-        if next.state == State::Review {
-            let mut parameters = self.parameters.clone();
-            // The seed FSRS itself uses, so fuzz spreads these cards the same way.
-            parameters.seed =
-                Seed::new(format!("{}_{}_{}", now.timestamp_millis(), card.reps, card.difficulty * card.stability));
-            let days = parameters.next_interval(next.stability, next.elapsed_days) as i64;
-            next.scheduled_days = days;
-            next.due = now + Duration::days(days);
-        }
-        next
+        apply(&self.parameters, card, now, counted)
     }
+
+    /// Roughly how long until the card comes back after this review, for the
+    /// score buttons. Without fuzz, so it doesn't change while the learner looks.
+    pub fn gap(&self, card: &rs_fsrs::Card, now: DateTime<Utc>, counted: Counted) -> Duration {
+        let parameters = Parameters { enable_fuzz: false, ..self.parameters.clone() };
+        apply(&parameters, card, now, counted).due - now
+    }
+}
+
+/// [`Scheduler::apply`] with the given FSRS parameters.
+fn apply(parameters: &Parameters, card: &rs_fsrs::Card, now: DateTime<Utc>, counted: Counted) -> rs_fsrs::Card {
+    let mut next = FSRS::new(parameters.clone()).next(card.clone(), now, counted.grade.rating()).card;
+    let gain = next.stability - card.stability;
+    // A new card has no stability to grow from yet.
+    if counted.share >= 1.0 || card.state == State::New || gain <= 0.0 {
+        return next;
+    }
+    next.stability = card.stability + counted.share.max(0.0) * gain;
+    // Learning steps are minutes long and stay as FSRS set them.
+    if next.state == State::Review {
+        let mut parameters = parameters.clone();
+        // The seed FSRS itself uses, so fuzz spreads these cards the same way.
+        parameters.seed =
+            Seed::new(format!("{}_{}_{}", now.timestamp_millis(), card.reps, card.difficulty * card.stability));
+        let days = parameters.next_interval(next.stability, next.elapsed_days) as i64;
+        next.scheduled_days = days;
+        next.due = now + Duration::days(days);
+    }
+    next
 }
 
 /// A fresh, never-studied schedule.
@@ -148,8 +166,7 @@ pub fn describe_due(due: DateTime<Utc>, now: DateTime<Utc>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Counted, DateTime, Duration, Grade, Mode, SCORE_ONLY_SHARE, Scheduler, State, Utc, count, describe, describe_due, new_schedule};
-    use Grade::{Comfortable, DontKnow, Easy, Hard};
+    use super::{Counted, DateTime, Duration, Grade, Mode, SCORE_ONLY_SHARE, Scheduler, State, Utc, count, describe, describe_due, new_schedule, suggest};    use Grade::{Comfortable, DontKnow, Easy, Hard};
 
     fn full(grade: Grade) -> Counted {
         Counted { grade, share: 1.0 }
@@ -160,25 +177,34 @@ mod tests {
     }
 
     #[test]
-    fn how_a_review_counts() {
+    fn the_own_score_counts_and_a_test_earns_full_trust() {
         let (read, listen) = (Mode::Read, Mode::Listen);
         let cases = [
-            // own score, pronunciation, meaning opened, mode => grade, share
-            (Easy, Some(Easy), false, read, Easy, 1.0),
-            (Comfortable, Some(Easy), false, read, Comfortable, 1.0),
-            (Easy, Some(Hard), false, read, Hard, 1.0),
-            (Easy, Some(DontKnow), false, read, DontKnow, 1.0),
-            (Comfortable, None, false, read, Comfortable, SCORE_ONLY_SHARE),
-            (Easy, None, false, listen, Easy, 1.0),
-            (Easy, None, true, read, Hard, 0.0),
-            (Comfortable, Some(Easy), true, read, Hard, 0.0),
-            (Easy, None, true, listen, Hard, 0.0),
-            (Hard, None, true, read, Hard, 0.0),
-            (DontKnow, None, true, listen, DontKnow, 1.0),
-            (DontKnow, None, false, read, DontKnow, 1.0),
+            // own score, tested, mode => share
+            (Easy, true, read, 1.0),
+            (Comfortable, true, read, 1.0),
+            (Comfortable, false, read, SCORE_ONLY_SHARE),
+            (Easy, false, listen, 1.0),
+            (DontKnow, false, read, 1.0),
         ];
-        for (own, speech, peeked, mode, grade, share) in cases {
-            assert_eq!(count(own, speech, peeked, mode), Counted { grade, share }, "{own:?} {speech:?} {peeked} {mode:?}");
+        for (own, tested, mode, share) in cases {
+            assert_eq!(count(own, tested, mode), Counted { grade: own, share }, "{own:?} {tested} {mode:?}");
+        }
+    }
+
+    #[test]
+    fn the_app_suggests_the_weaker_test_and_moeilijk_at_best_after_a_look() {
+        let cases = [
+            // weaker test, meaning opened => suggestion
+            (Some(Easy), false, Some(Easy)),
+            (Some(DontKnow), false, Some(DontKnow)),
+            (Some(Easy), true, Some(Hard)),
+            (Some(DontKnow), true, Some(DontKnow)),
+            (None, true, Some(Hard)),
+            (None, false, None),
+        ];
+        for (tested, peeked, suggestion) in cases {
+            assert_eq!(suggest(tested, peeked), suggestion, "{tested:?} {peeked}");
         }
     }
 
@@ -202,8 +228,8 @@ mod tests {
     }
 
     /// On a card answered "Gaat goed" four times, each when it fell due: a miss
-    /// comes back within minutes, a look at the meaning keeps the last pause,
-    /// and a score alone grows it less than a score backed by reading aloud.
+    /// comes back within minutes, and a score alone grows the pause less than
+    /// a score after a test, however the test went.
     #[test]
     fn trust_decides_how_far_a_known_card_moves() {
         let scheduler = Scheduler::exact();
@@ -216,10 +242,10 @@ mod tests {
         assert_eq!(card.state, State::Review);
         let last = Duration::days(card.scheduled_days);
         let after = |counted| pause(&scheduler, &card, now, counted);
-        assert!(after(count(DontKnow, None, false, Mode::Read)) <= Duration::minutes(10));
-        assert!((after(count(Easy, None, true, Mode::Read)) - last).num_days().abs() <= 1);
-        let (score_only, spoke) = (after(count(Comfortable, None, false, Mode::Read)), after(full(Comfortable)));
-        assert!(last < score_only && score_only < spoke, "{last} < {score_only} < {spoke}");
+        assert!(after(count(DontKnow, false, Mode::Read)) <= Duration::minutes(10));
+        let (score_only, tested) = (after(count(Comfortable, false, Mode::Read)), after(count(Comfortable, true, Mode::Read)));
+        assert!(last < score_only && score_only < tested, "{last} < {score_only} < {tested}");
+        assert_eq!(scheduler.gap(&card, now, full(Comfortable)), tested, "the buttons show the pause the score gives");
     }
 
     #[test]

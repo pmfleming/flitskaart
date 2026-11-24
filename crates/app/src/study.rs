@@ -1,7 +1,7 @@
 //! Oefenen: one panel per card. Read the Dutch, test it by speaking or writing,
 //! hear the sentence, look up the meaning, and score how easily it came back.
 
-use dutch_flashcards_core::schedule::{Scheduler, describe_due};
+use dutch_flashcards_core::schedule::{Scheduler, count, describe, describe_due, suggest, weaker_test};
 use dutch_flashcards_core::speech::{Assessment, missed_ranges};
 use dutch_flashcards_core::stats::Streak;
 use dutch_flashcards_core::store::{Counts, Mode, Review};
@@ -572,13 +572,21 @@ impl FlashcardsApp {
         h_flex().gap_3().justify_center().children(first).child(write).child(skip)
     }
 
-    /// The four scores: how easily the sentence came back. Nothing else.
+    /// The four scores: how easily the sentence came back. Each shows when the
+    /// card would come back; after a test or a look at the meaning, the app's
+    /// suggestion is marked. The learner's choice is final.
     fn render_scores(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let card_bg = surface(cx);
         let open = !self.busy_listening() && !self.writing_now();
+        let attempt = &self.study.attempt;
+        let tested = weaker_test(attempt.speech.as_ref().map(|s| s.grade), attempt.written.map(|w| w.grade));
+        let suggested = suggest(tested, attempt.peeked);
+        let (now, schedule) = (Self::now(), self.study.card.as_ref().map(|card| &card.schedule));
         h_flex().gap_2p5().w_full().max_w(px(640.)).children(Grade::ALL.map(|grade| {
             let tone = grade_color(grade, cx);
+            let is_suggested = suggested == Some(grade);
+            let gap = schedule.map(|schedule| describe(self.study.scheduler.gap(schedule, now, count(grade, tested.is_some(), self.study.mode))));
             v_flex()
                 .id(SharedString::from(format!("grade-{}", grade.number())))
                 .flex_1()
@@ -588,11 +596,26 @@ impl FlashcardsApp {
                 .overflow_hidden()
                 .rounded(px(10.))
                 .border_1()
-                .border_color(theme.border)
-                .bg(card_bg)
+                .border_color(if is_suggested { tone } else { theme.border })
+                .bg(if is_suggested { tone.opacity(0.08) } else { card_bg })
                 .child(div().w_full().h(px(4.)).mb_1().bg(tone))
                 .child(div().font_weight(FontWeight::MEDIUM).child(grade.label()))
-                .child(keycap(&grade.number().to_string(), cx))
+                .children(gap.map(|gap| explained(("grade-gap", grade.number() as u64), "Komt terug over").child(hint(gap, cx))))
+                .child(
+                    h_flex()
+                        .gap_1p5()
+                        .items_center()
+                        .child(keycap(&grade.number().to_string(), cx))
+                        .when(is_suggested, |d| {
+                            d.child(
+                                explained("grade-suggested", "Wat de app voorstelt na je test; jouw score telt")
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(tone)
+                                    .child("voorstel"),
+                            )
+                        }),
+                )
                 .when(!open, |d| d.opacity(0.5))
                 .when(open, |d| {
                     d.cursor_pointer()

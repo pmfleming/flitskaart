@@ -7,7 +7,7 @@ use turso::{Connection, Value};
 use crate::llm::{Cli, DEFAULT_MODEL, Effort};
 use crate::model::{Card, CardId, Grade, NewCard, Status, normalize};
 use crate::paths::Paths;
-use crate::schedule::{Scheduler, count, new_schedule};
+use crate::schedule::{Scheduler, count, new_schedule, suggest, weaker_test};
 use crate::speech::Assessment;
 use crate::voice::{Gender, VOICES, voices_for};
 use crate::writing::Written;
@@ -89,6 +89,9 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("reviews", "written_accuracy", "REAL"),
     // How long the card was in front of the learner, for Voortgang.
     ("reviews", "seconds", "REAL"),
+    // The score the app suggested from the tests and the meaning; the
+    // learner's own score is final.
+    ("reviews", "suggested_grade", "INTEGER"),
 ];
 
 const CARD_COLUMNS: &str =
@@ -442,9 +445,10 @@ impl Store {
     pub fn record_review(&self, id: CardId, review: Review, scheduler: &Scheduler, now: DateTime<Utc>) -> Result<Card> {
         let Review { own, speech, written, mode, peeked, seconds } = review;
         let card = self.card(id)?.ok_or_else(|| anyhow!("card {id} no longer exists"))?;
-        // Reading aloud and writing are both tests; the weaker one counts.
-        let tested = [speech.map(|s| s.grade), written.map(|w| w.grade)].into_iter().flatten().min();
-        let counted = count(own, tested, peeked, mode);
+        // The tests only suggest a score; the learner's own is final.
+        let tested = weaker_test(speech.map(|s| s.grade), written.map(|w| w.grade));
+        let suggested = suggest(tested, peeked);
+        let counted = count(own, tested.is_some(), mode);
         let schedule = scheduler.apply(&card.schedule, now, counted);
         let accuracy = || speech.map_or(Value::Null, |s| Value::Real(f64::from(s.accuracy)));
         self.exec(
@@ -463,8 +467,8 @@ impl Store {
             ],
         )?;
         self.exec(
-            "INSERT INTO reviews (card_id, grade, own_grade, speech_grade, speech_accuracy, heard, mode, peeked, reviewed_at, share, written_grade, written_accuracy, seconds)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO reviews (card_id, grade, own_grade, speech_grade, speech_accuracy, heard, mode, peeked, reviewed_at, share, written_grade, written_accuracy, seconds, suggested_grade)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             vec![
                 Value::Integer(id),
                 Value::Integer(i64::from(counted.grade.number())),
@@ -479,6 +483,7 @@ impl Store {
                 written.map_or(Value::Null, |w| Value::Integer(i64::from(w.grade.number()))),
                 written.map_or(Value::Null, |w| Value::Real(f64::from(w.accuracy))),
                 seconds.map_or(Value::Null, |s| Value::Real(s.clamp(0.0, crate::stats::MAX_REVIEW_SECONDS))),
+                suggested.map_or(Value::Null, |g| Value::Integer(i64::from(g.number()))),
             ],
         )?;
         self.card(id)?.ok_or_else(|| anyhow!("card {id} disappeared"))
@@ -742,22 +747,25 @@ mod tests {
         let unclear = assess("Ik heb brood gekocht.", "Ik heb gekocht.");
         let a = store.record_review(ids[0], read(Grade::Comfortable, Some(&clear), false), &scheduler, now).unwrap();
         let b = store.record_review(ids[1], read(Grade::Easy, Some(&unclear), false), &scheduler, now).unwrap();
-        assert!(b.due.unwrap() < a.due.unwrap(), "unclear speech brings a known card back sooner");
+        assert!(b.due.unwrap() > a.due.unwrap(), "the own score counts, however the reading went");
         assert_eq!((a.speech_accuracy, b.misses), (Some(1.0), 0), "a miss means not knowing the card");
         let a = store.record_review(ids[0], read(Grade::Comfortable, None, false), &scheduler, a.due.unwrap()).unwrap();
         store.record_review(ids[0], read(Grade::Easy, None, true), &scheduler, a.due.unwrap()).unwrap();
 
-        let saved = reviews(&store, "share, grade, own_grade, speech_grade, heard");
+        let saved = reviews(&store, "share, grade, own_grade, speech_grade, heard, suggested_grade");
         let shares: Vec<_> = saved.iter().map(|row| row[0].clone()).collect();
         let share = Value::Real(crate::schedule::SCORE_ONLY_SHARE);
-        assert_eq!(shares, [Value::Real(1.0), Value::Real(1.0), share, Value::Real(0.0)]);
-        assert_eq!((integer(&saved[1][1]), integer(&saved[1][2])), (integer(&saved[1][3]), 4), "pronunciation replaced the score");
+        assert_eq!(shares, [Value::Real(1.0), Value::Real(1.0), share.clone(), share]);
+        let unclear_grade = integer(&saved[1][3]);
+        assert!(unclear_grade < 4);
+        assert_eq!((integer(&saved[1][1]), integer(&saved[1][2]), integer(&saved[1][5])), (4, 4, unclear_grade), "the reading only suggested a score");
         assert_eq!(text(&saved[1][4]), "Ik heb gekocht.");
-        assert_eq!((integer(&saved[3][1]), integer(&saved[3][2])), (2, 4), "Makkelijk with the meaning open counts as Moeilijk");
+        assert_eq!(saved[2][5], Value::Null, "nothing to suggest from");
+        assert_eq!((integer(&saved[3][1]), integer(&saved[3][5])), (4, 2), "with the meaning open the app suggests Moeilijk, the score stays");
     }
 
     #[test]
-    fn writing_counts_as_a_test_and_the_weaker_test_wins() {
+    fn writing_counts_as_a_test_and_the_weaker_test_is_suggested() {
         let (_dir, store) = store();
         let (now, scheduler) = (Utc::now(), Scheduler::exact());
         let ids = deck(&store, &["Ik heb kaas gekocht."], now);
@@ -765,9 +773,10 @@ mod tests {
         let written = Written { accuracy: 0.7, grade: Grade::Hard };
         let review = Review { written: Some(written), ..read(Grade::Easy, Some(&clear), false) };
         store.record_review(ids[0], review, &scheduler, now).unwrap();
-        let saved = reviews(&store, "share, grade, speech_grade, written_grade, written_accuracy");
+        let saved = reviews(&store, "share, grade, speech_grade, written_grade, written_accuracy, suggested_grade");
         assert_eq!(saved[0][0], Value::Real(1.0), "tested, so it counts in full");
-        assert_eq!((integer(&saved[0][1]), integer(&saved[0][2]), integer(&saved[0][3])), (2, 4, 2), "the writing set the grade");
+        assert_eq!((integer(&saved[0][1]), integer(&saved[0][2]), integer(&saved[0][3])), (4, 4, 2), "the own score set the grade");
+        assert_eq!(integer(&saved[0][5]), 2, "the weaker test was suggested");
         assert!(matches!(saved[0][4], Value::Real(a) if (a - 0.7).abs() < 1e-6));
     }
 

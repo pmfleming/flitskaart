@@ -132,7 +132,7 @@ impl FlashcardsApp {
                         .child(icons::write().size_4())
                         .child(grade_chip(result.grade, cx)),
                 )
-                .child(explained("written-accuracy", "Zoveel letters in één keer goed").child(hint(format!("{:.0}%", result.accuracy * 100.0), cx))),
+                .child(explained("written-accuracy", "Zoveel letters goed; een verbeterde letter telt half").child(hint(format!("{:.0}%", result.accuracy * 100.0), cx))),
         )
     }
 }

@@ -30,8 +30,8 @@ The two tests:
   Writing every letter right finishes by itself; otherwise `Enter` or **Klaar**
   finishes and shows the sentence corrected, the letters you missed in red.
   `Esc` stops without a grade. Every key goes to the writing until it is done.
-  The grade is the share of letters right first time, on the same 1–4 scale as
-  speaking; a fixed letter doesn't count as right. Writing it again doesn't
+  The grade is the share of letters right first time, a fixed letter counting
+  half: 90%+ is 4, 75%+ is 3, 50%+ is 2, less is 1. Writing it again doesn't
   change the grade.
 - **Overslaan** (`S`) – moves on without saving anything about the card: no
   score, no change to when it comes back. Skipped cards wait until you ask for
@@ -46,22 +46,24 @@ The helpers, top right in the card (they never decide the review):
 Then score:
 
 - **Weet ik niet / Moeilijk / Gaat goed / Makkelijk** (`1`–`4`) – how easily
-  the sentence came back. This saves the review and shows the next card.
+  the sentence came back. This saves the review and shows the next card. Each
+  button shows when the card would come back with that score.
 
-What you did before scoring decides how far your score is trusted. The panel
-doesn't show any of this:
+Your score is final: it is the grade the scheduler gets. After a test, the app
+marks the score it suggests (**voorstel**): the speaking or writing grade, the
+lower one if you did both, and Moeilijk at best if you opened the meaning. Take
+it or press another.
 
-- **Spoken or written, then scored** – counts in full. If the test grade is
-  lower than your own score, it is used instead; with both tests, the lower one.
+What you did before scoring decides how far your score is trusted:
+
+- **Spoken or written, then scored** – counts in full, however the test went.
 - **Scored only** – the card keeps 70% of the longer pause FSRS proposes
   (`SCORE_ONLY_SHARE` in `crates/core/src/schedule.rs`).
-- **Opened the meaning** – counts as Moeilijk at best, and the pause does not
-  grow, even if you also read it aloud.
-- **Weet ik niet** always counts in full.
+- **Luisteren** and **Weet ik niet** always count in full.
 
-A new card has no pause to grow yet, so only the grade rules apply to it. Your
-own score, the pronunciation and writing grades, the grade used and the share
-are kept with every review.
+A new card has no pause to grow yet, so the share doesn't apply to it. Your
+own score, the app's suggestion, the pronunciation and writing grades and the
+share are kept with every review.
 
 Pronunciation grades come from the share of the card's letters Whisper
 understood: 95%+ is 4 (Heel duidelijk), 85%+ is 3, 65%+ is 2, less is 1.
