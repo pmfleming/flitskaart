@@ -180,6 +180,8 @@ pub struct Settings {
     pub appearance: Appearance,
     /// How much recordings are amplified before they are judged; one of [`INPUT_BOOSTS`].
     pub input_boost: f32,
+    /// PipeWire source chosen for this app, or the system default.
+    pub input_device: Option<String>,
     /// The tool that answers in conversations and drafting.
     pub cli: Cli,
     /// The model, as that tool knows it.
@@ -197,6 +199,7 @@ impl Default for Settings {
             mode: Mode::Read,
             appearance: Appearance::System,
             input_boost: 1.0,
+            input_device: None,
             cli: Cli::default(),
             model: DEFAULT_MODEL.into(),
             effort: Effort::default(),
@@ -520,6 +523,7 @@ impl Store {
                 "mode" => settings.mode = Mode::parse(&value),
                 "appearance" => settings.appearance = Appearance::parse(&value).unwrap_or(settings.appearance),
                 "input_boost" => settings.input_boost = value.parse().map(snap_input_boost).unwrap_or(settings.input_boost),
+                "input_device" if !value.is_empty() => settings.input_device = Some(value),
                 "cli" => settings.cli = Cli::parse(&value).unwrap_or(settings.cli),
                 "model" if !value.trim().is_empty() => settings.model = value,
                 "effort" => settings.effort = Effort::parse(&value).unwrap_or(settings.effort),
@@ -530,7 +534,7 @@ impl Store {
     }
 
     pub fn save_settings(&self, settings: &Settings) -> Result<()> {
-        let pairs: [(&str, Value); 10] = [
+        let pairs: [(&str, Value); 11] = [
             ("new_per_day", settings.new_per_day.to_string().into()),
             ("gender", settings.gender.as_str().into()),
             ("male_voice", settings.male_voice.as_str().into()),
@@ -538,6 +542,7 @@ impl Store {
             ("mode", settings.mode.as_str().into()),
             ("appearance", settings.appearance.as_str().into()),
             ("input_boost", settings.input_boost.to_string().into()),
+            ("input_device", settings.input_device.as_deref().unwrap_or("").into()),
             ("cli", settings.cli.id().into()),
             ("model", settings.model.as_str().into()),
             ("effort", settings.effort.as_str().into()),
@@ -790,6 +795,7 @@ mod tests {
             mode: Mode::Listen,
             appearance: Appearance::Dark,
             input_boost: 1.5,
+            input_device: Some("alsa_input.test".into()),
             cli: crate::llm::Cli::Codex,
             model: "gpt-6.2-sol".into(),
             effort: crate::llm::Effort::Max,
@@ -800,6 +806,8 @@ mod tests {
         drop(store);
         let store = Store::open(&Paths::at(dir.path())).unwrap();
         assert_eq!(store.settings().unwrap(), settings);
+        store.save_settings(&Settings { input_device: None, ..settings.clone() }).unwrap();
+        assert_eq!(store.settings().unwrap().input_device, None);
 
         // A retired voice, the old speaking and silent modes, and boosts between steps.
         store.save_settings(&Settings { female_voice: "mls-25".into(), ..settings }).unwrap();

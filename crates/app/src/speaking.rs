@@ -12,11 +12,9 @@ use gpui_kit::{AnyElement, App, Context, Div, FontWeight, Hsla, IntoElement, Par
 
 use crate::app::FlashcardsApp;
 use crate::icons;
-use crate::recorder::Captured;
+use crate::recorder::{Captured, Loudness};
 use crate::study::Attempt;
 use crate::ui::{explained, hint, icon_button};
-
-const NOT_HEARD: &str = "Ik hoorde niets. Spreek wat luider of dichter bij de microfoon.";
 
 impl Attempt {
     /// Shows why the reading could not be judged, and logs it.
@@ -65,11 +63,20 @@ impl FlashcardsApp {
         let (card_id, text) = (card.id, card.dutch.clone());
         let attempt = &mut self.study.attempt;
         let saved = captured.and_then(|captured| {
-            captured.had_speech.then(|| write_wav_16k(&path, &captured.samples, captured.rate, captured.channels)).transpose()
+            let loudness = Loudness::of(&captured);
+            match loudness {
+                Loudness::NoSignal | Loudness::Silent => {
+                    attempt.speech_note = Some(loudness.verdict().into());
+                    return Ok(None);
+                }
+                Loudness::Quiet => attempt.speech_note = Some(loudness.verdict().into()),
+                Loudness::Good | Loudness::Clipped => {}
+            }
+            write_wav_16k(&path, &captured.samples, captured.rate, captured.channels).map(Some)
         });
         match saved {
             Ok(Some(())) => (attempt.has_recording, attempt.judging) = (true, true),
-            Ok(None) => return attempt.speech_note = Some(NOT_HEARD.into()),
+            Ok(None) => return,
             Err(err) => return attempt.fail(err),
         }
         let listener = self.listener.clone();

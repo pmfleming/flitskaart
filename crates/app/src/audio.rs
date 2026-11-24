@@ -41,6 +41,9 @@ impl FlashcardsApp {
     /// Speaks `text` with `voice`: generates the audio in the background if it
     /// is not cached yet, then plays it.
     pub fn speak(&mut self, text: String, voice: &'static VoiceOption, speed: Speed, cx: &mut Context<Self>) {
+        if self.is_capturing() {
+            return;
+        }
         let speaker = self.sound.speaker.clone();
         self.sound.preparing = !speaker.audio_path(&text, voice, speed).exists();
         self.sound.ticket += 1;
@@ -121,6 +124,9 @@ impl FlashcardsApp {
 
     /// Plays a recording, saying `what` it is.
     pub fn play_file(&mut self, path: &Path, what: &'static str, cx: &mut Context<Self>) {
+        if self.is_capturing() {
+            return;
+        }
         self.sound.ticket += 1;
         self.sound.playing = false;
         let ticket = self.sound.ticket;

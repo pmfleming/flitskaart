@@ -9,7 +9,7 @@ use dutch_flashcards_core::speech::write_wav_16k;
 use dutch_flashcards_core::store::{INPUT_BOOSTS, boost_label, snap_input_boost};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
-use gpui_kit::component::{ActiveTheme as _, Colorize as _, Disableable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Colorize as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{AnyElement, App, AppContext as _, Context, Div, Entity, FontWeight, IntoElement, ParentElement as _, SharedString, Styled as _, Subscription, div, px};
 
@@ -65,6 +65,10 @@ impl MicTest {
 
     pub fn is_busy(&self) -> bool {
         self.capture.is_on() || self.transcribing
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.capture.is_on()
     }
 
     /// Shows why the test went wrong, and logs it.
@@ -138,7 +142,7 @@ impl FlashcardsApp {
             && write_wav_16k(&path, &captured.samples, captured.rate, captured.channels).inspect_err(|err| self.mic_test.fail(err)).is_ok();
         self.mic_test.result = Some(MicResult { loudness, device: captured.device, saved, heard: None });
         self.show_mic_test_result();
-        if saved && loudness != Loudness::Silent && self.listener.is_installed() {
+        if saved && matches!(loudness, Loudness::Quiet | Loudness::Good | Loudness::Clipped) && self.listener.is_installed() {
             self.transcribe_mic_test(path, cx);
         }
     }
@@ -284,28 +288,61 @@ impl FlashcardsApp {
             .child(ticks)
     }
 
-    /// The microphones, one row each: the one recordings come from first and
-    /// highlighted, the others quieter below it.
-    fn render_inputs(&self, cx: &App) -> AnyElement {
-        let theme = cx.theme();
-        let Some(inputs) = &self.mic_test.inputs else { return hint(self.mic_test.unknown_source(), cx).into_any_element() };
-        let default = inputs.default_input();
-        let muted = default.is_some_and(|input| input.muted);
+    fn choose_input(&mut self, node: Option<String>, cx: &mut Context<Self>) {
+        if self.is_capturing() {
+            return;
+        }
+        self.settings.input_device = node;
+        self.save_settings();
+        self.refresh_inputs(cx);
+        cx.notify();
+    }
+
+    fn render_inputs(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let inputs = self.mic_test.inputs.as_ref();
+        let selected = self.settings.input_device.as_deref();
+        let active = match selected {
+            Some(node) => inputs.and_then(|inputs| inputs.0.iter().find(|input| input.node == node)),
+            None => inputs.and_then(Inputs::default_input),
+        };
+        let busy = self.is_capturing();
         let header = h_flex()
             .justify_between()
             .items_center()
             .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme.muted_foreground).child("Microfoons"))
             .child(
-                explained("mic-choose", "Een andere microfoon kies je in de geluidsinstellingen van je systeem; de app neemt op met de standaardmicrofoon.")
-                    .text_color(theme.muted_foreground)
-                    .child(icons::tip().size_4()),
+                Button::new("mic-use-default").small().outline().label("Systeemstandaard")
+                    .tooltip("Volg de standaardmicrofoon van je systeem")
+                    .disabled(busy || selected.is_none())
+                    .on_click(cx.listener(|this, _, _, cx| this.choose_input(None, cx))),
             );
+        let rows = inputs.into_iter().flat_map(|inputs| &inputs.0).enumerate().map(|(index, input)| {
+            let in_use = active.is_some_and(|active| active.node == input.node);
+            let mut row = input_row(index, input, in_use, cx);
+            if selected != Some(input.node.as_str()) {
+                let node = input.node.clone();
+                row = row.child(
+                    Button::new(("mic-select", index as u64)).small().outline().label("Kies")
+                        .tooltip(format!("Gebruik {} voor Flitskaart", input.label))
+                        .disabled(busy)
+                        .on_click(cx.listener(move |this, _, _, cx| this.choose_input(Some(node.clone()), cx))),
+                );
+            }
+            row
+        });
+        let note = match (selected, inputs, active) {
+            (_, _, Some(input)) if input.muted => Some("De microfoon in gebruik staat gedempt. Zet hem aan in je systeeminstellingen.".into()),
+            (Some(_), _, None) if self.mic_test.inputs_read => Some("De gekozen microfoon is niet beschikbaar. Kies een andere of gebruik de systeemstandaard.".into()),
+            (None, Some(_), None) => Some("Er is geen standaardmicrofoon gekozen in je systeeminstellingen.".into()),
+            (_, None, _) => Some(self.mic_test.unknown_source()),
+            _ => None,
+        };
         v_flex()
             .gap_1p5()
             .child(header)
-            .children(inputs.0.iter().enumerate().map(|(index, input)| input_row(index, input, cx)))
-            .when(default.is_none(), |d| d.child(hint("Er is geen standaardmicrofoon gekozen in je systeeminstellingen.", cx).text_color(theme.danger)))
-            .when(muted, |d| d.child(hint("De microfoon in gebruik staat gedempt. Zet hem aan in je systeeminstellingen.", cx).text_color(theme.danger)))
+            .children(rows)
+            .when_some(note, |d, note| d.child(hint(note, cx)))
             .into_any_element()
     }
 
@@ -314,7 +351,7 @@ impl FlashcardsApp {
         let color = match result.loudness {
             Loudness::Good => theme.success,
             Loudness::Quiet | Loudness::Clipped => theme.warning,
-            Loudness::Silent => theme.danger,
+            Loudness::NoSignal | Loudness::Silent => theme.danger,
         };
         sub_box(color.opacity(0.45), color.opacity(0.08))
             .gap_2()
@@ -344,9 +381,8 @@ fn sub_box(border: gpui_kit::Hsla, bg: gpui_kit::Hsla) -> Div {
 
 /// One microphone: its kind, its name (cut short when long, whole on hover),
 /// its volume, whether it is muted, and whether recordings come from it.
-fn input_row(index: usize, input: &Input, cx: &App) -> Div {
+fn input_row(index: usize, input: &Input, active: bool, cx: &App) -> Div {
     let theme = cx.theme();
-    let active = input.is_default;
     let id = index as u64;
     let kind = match input.kind {
         InputKind::Bluetooth => icons::headset(),

@@ -260,9 +260,9 @@ pub fn hint(text: impl Into<SharedString>, cx: &App) -> Div {
 pub fn level_meter(level: f32, cx: &App) -> Div {
     let theme = cx.theme();
     let clamped = level.clamp(0.0, 1.0);
-    let fill = if clamped >= 0.88 {
+    let fill = if clamped >= 0.98 {
         theme.danger
-    } else if clamped >= 0.20 {
+    } else if clamped >= 0.53 {
         theme.success
     } else {
         theme.muted_foreground

@@ -37,6 +37,8 @@ impl InputKind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Input {
+    /// Stable PipeWire node name, used to target capture without changing the system default.
+    pub node: String,
     /// The name people see, such as `WF-1000XM5`.
     pub label: String,
     pub kind: InputKind,
@@ -110,6 +112,7 @@ impl Dump {
         // PipeWire keeps volumes cubed; the slider shows the cube root.
         let volume = sound["channelVolumes"].as_array().and_then(|channels| channels.iter().filter_map(Value::as_f64).reduce(f64::max));
         Some(Input {
+            node: name.to_string(),
             label: label.to_string(),
             kind: InputKind::of(name, bus),
             volume: volume.map(|v| v.cbrt() as f32),
