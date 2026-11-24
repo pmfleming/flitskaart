@@ -13,6 +13,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
+use dutch_flashcards_core::inputs::Inputs;
 use rodio::Source as _;
 use rodio::cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
 use rodio::cpal::{self, FromSample, SampleFormat, SizedSample};
@@ -31,6 +32,11 @@ const LEARN_NOISE: Duration = Duration::from_millis(250);
 /// recording is given up. Generous, because a Bluetooth headset takes a few
 /// seconds to switch to its microphone.
 const STALL_LIMIT: Duration = Duration::from_secs(5);
+
+/// A recording whose last sound arrived longer than this before it ended is
+/// logged as a microphone that stopped delivering. Sound normally arrives
+/// every few tens of milliseconds, a Bluetooth headset's every few hundred.
+const STOPPED_EARLY: Duration = Duration::from_secs(1);
 
 /// Shown when the microphone stops delivering sound in the middle of a recording.
 const STALLED: &str =
@@ -119,9 +125,10 @@ fn record(boost: f32, shared: &Shared) -> Result<Captured> {
         name.as_deref().unwrap_or("onbekend apparaat"),
         config.sample_format(),
     ));
+    log_default_input();
 
     let started = Instant::now();
-    let feed = Feed { sound, failed: &failed, boost, stall_limit: STALL_LIMIT };
+    let feed = Feed::new(sound, &failed, boost, STALL_LIMIT);
     let result = listen(feed, rate as usize * usize::from(channels), shared);
     drop(stream);
     shared.level.store(0, Ordering::Relaxed);
@@ -133,6 +140,24 @@ fn record(boost: f32, shared: &Shared) -> Result<Captured> {
         if had_speech { "ja" } else { "nee" }
     ));
     Ok(Captured { samples, rate, channels, had_speech, device: name })
+}
+
+/// Logs which microphone PipeWire records from, since cpal only knows it as
+/// "Default Audio Device". `pw-dump` takes a moment, so it runs on its own thread.
+fn log_default_input() {
+    let spawned = std::thread::Builder::new().name("microfoon-info".into()).spawn(|| {
+        let text = match Inputs::current() {
+            Some(inputs) => match inputs.default_input() {
+                Some(input) => format!("{} ({})", input.label, input.describe()),
+                None => "geen standaardmicrofoon ingesteld".into(),
+            },
+            None => "onbekend, pw-dump gaf geen antwoord".into(),
+        };
+        logging::info(format!("Opname: standaardmicrofoon volgens PipeWire: {text}"));
+    });
+    if let Err(err) = spawned {
+        logging::warn(format!("Opname: kon de standaardmicrofoon niet opvragen: {err}"));
+    }
 }
 
 /// Opens the input stream in the device's own sample format.
@@ -178,20 +203,80 @@ struct Feed<'a> {
     failed: &'a AtomicBool,
     boost: f32,
     stall_limit: Duration,
+    delivery: Delivery,
 }
 
-impl Feed<'_> {
+impl<'a> Feed<'a> {
+    fn new(sound: Receiver<Vec<f32>>, failed: &'a AtomicBool, boost: f32, stall_limit: Duration) -> Self {
+        Feed { sound, failed, boost, stall_limit, delivery: Delivery::new() }
+    }
+
     /// Waits briefly for the next burst of sound and adds it, amplified, to
     /// `samples`. Returns whether one came; fails once the microphone has
     /// delivered nothing for too long, or reported an error.
-    fn receive(&self, samples: &mut Vec<f32>, last_sound: Instant) -> Result<bool> {
+    fn receive(&mut self, samples: &mut Vec<f32>, last_sound: Instant) -> Result<bool> {
         let burst = self.sound.recv_timeout(Duration::from_millis(100));
         if self.failed.load(Ordering::Relaxed) || burst.is_err() && last_sound.elapsed() > self.stall_limit {
             bail!(STALLED);
         }
         let Ok(burst) = burst else { return Ok(false) };
+        self.delivery.arrived(burst.len());
         samples.extend(burst.into_iter().map(|sample| amplify(sample, self.boost)));
         Ok(true)
+    }
+}
+
+/// When the microphone's sound arrived, for the log. A microphone that stops
+/// delivering partway shows up here even when the learner ends the recording
+/// before the stall limit, which the recording itself can't tell from silence.
+struct Delivery {
+    started: Instant,
+    bursts: usize,
+    samples: usize,
+    first: Option<Duration>,
+    last: Option<Duration>,
+    longest_gap: Duration,
+}
+
+impl Delivery {
+    fn new() -> Self {
+        Delivery { started: Instant::now(), bursts: 0, samples: 0, first: None, last: None, longest_gap: Duration::ZERO }
+    }
+
+    /// Notes a burst of `samples` arriving now.
+    fn arrived(&mut self, samples: usize) {
+        let at = self.started.elapsed();
+        if let Some(last) = self.last {
+            self.longest_gap = self.longest_gap.max(at - last);
+        }
+        self.first.get_or_insert(at);
+        self.last = Some(at);
+        self.bursts += 1;
+        self.samples += samples;
+    }
+
+    /// Logs how the sound arrived, and warns when it stopped well before the end.
+    fn report(&self) {
+        let ended = self.started.elapsed();
+        let (Some(first), Some(last)) = (self.first, self.last) else {
+            return logging::warn(format!("Opname: de microfoon leverde in {:.1} s helemaal geen geluid", ended.as_secs_f32()));
+        };
+        logging::info(format!(
+            "Opname: {} stukken geluid ({} samples), eerste na {:.2} s, laatste na {:.2} s, langste pauze {:.2} s, einde na {:.2} s",
+            self.bursts,
+            self.samples,
+            first.as_secs_f32(),
+            last.as_secs_f32(),
+            self.longest_gap.as_secs_f32(),
+            ended.as_secs_f32(),
+        ));
+        if ended - last > STOPPED_EARLY {
+            logging::warn(format!(
+                "Opname: de microfoon leverde na {:.2} s geen geluid meer; de laatste {:.1} s van de opname kwam er niets binnen",
+                last.as_secs_f32(),
+                (ended - last).as_secs_f32(),
+            ));
+        }
     }
 }
 
@@ -225,8 +310,15 @@ impl SpeechGate {
 }
 
 /// Reads sound until the learner is done. `per_second` counts samples across
-/// all channels. Returns the samples and whether speech was heard.
-fn listen(feed: Feed, per_second: usize, shared: &Shared) -> Result<(Vec<f32>, bool)> {
+/// all channels. Returns the samples and whether speech was heard, and logs
+/// how the microphone delivered them.
+fn listen(mut feed: Feed, per_second: usize, shared: &Shared) -> Result<(Vec<f32>, bool)> {
+    let heard = listen_until_done(&mut feed, per_second, shared);
+    feed.delivery.report();
+    heard
+}
+
+fn listen_until_done(feed: &mut Feed, per_second: usize, shared: &Shared) -> Result<(Vec<f32>, bool)> {
     let block = (per_second * BLOCK.as_millis() as usize / 1000).max(1);
     let mut samples: Vec<f32> = Vec::with_capacity(per_second * 6);
     let mut gate = SpeechGate::default();
@@ -332,7 +424,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         sound.chunks(8_000).for_each(|burst| sender.send(burst.to_vec()).unwrap());
         let failed = AtomicBool::new(false);
-        let result = listen(Feed { sound: receiver, failed: &failed, boost, stall_limit }, 16_000, &Shared::default());
+        let result = listen(Feed::new(receiver, &failed, boost, stall_limit), 16_000, &Shared::default());
         drop(sender);
         result
     }

@@ -65,6 +65,12 @@ pub fn info(text: impl Display) {
     write("INFO", &text.to_string());
 }
 
+/// Something that looks wrong but isn't shown to the learner, such as a
+/// microphone that stopped delivering sound partway through a recording.
+pub fn warn(text: impl Display) {
+    write("WARN", &text.to_string());
+}
+
 fn write(level: &str, text: &str) {
     let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     let line = format!("{stamp} {level:<5} {}\n", text.trim_end().replace('\n', "\n    "));

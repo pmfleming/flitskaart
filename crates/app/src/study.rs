@@ -238,7 +238,7 @@ impl FlashcardsApp {
     }
 
     fn start_card(&mut self, card: Option<Card>, cx: &mut Context<Self>) {
-        self.stop_audio();
+        self.stop_audio("andere kaart");
         self.study.attempt = Attempt::default();
         let text = card.as_ref().map(|card| card.dutch.clone());
         self.study.shown_at = card.as_ref().map(|_| Self::now());

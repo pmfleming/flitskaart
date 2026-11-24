@@ -50,7 +50,9 @@ impl FlashcardsApp {
     /// Records into `slot` and hands the result to `done`. With `--recording`,
     /// the file stands in for the microphone and `done` runs straight away.
     pub fn start_capture(&mut self, slot: Slot, done: Done, cx: &mut Context<Self>) {
-        self.stop_audio();
+        // A Bluetooth headset is switched to headset mode for the recording;
+        // the app's own sound must not be running through that switch.
+        self.stop_audio("opname begint");
         let boost = self.settings.input_boost;
         if let Some(captured) = self.fake_recording.as_deref().map(|path| recorder::from_file(path, boost)) {
             return done(self, captured, cx);

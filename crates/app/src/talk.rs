@@ -161,7 +161,7 @@ impl FlashcardsApp {
     /// conversation opens on it, and with none it opens without. If a search
     /// for other angles finds none, the earlier ones stay.
     fn prepare_opening(&mut self, topic: &str, previous: Vec<Source>, cx: &mut Context<Self>) {
-        self.stop_audio();
+        self.stop_audio("nieuw gesprek");
         self.talk.show_sources = false;
         self.talk.ticket += 1;
         let (ticket, llm) = (self.talk.ticket, self.llm.clone());
@@ -492,7 +492,7 @@ impl FlashcardsApp {
         (self.talk.researching, self.talk.thinking, self.talk.hearing, self.talk.refreshing) = (false, false, false, false);
         self.talk.options.clear();
         self.talk.capture.cancel();
-        self.stop_audio();
+        self.stop_audio("gesprek gesloten");
         cx.notify();
     }
 

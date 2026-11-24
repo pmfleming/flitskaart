@@ -1,9 +1,15 @@
 //! Sound out: the Dutch voice and recordings, through the default sound device.
+//!
+//! The device is open only while something plays. A Bluetooth headset
+//! switches to headset mode for each recording and back afterwards; with the
+//! app's output stream still running through those switches, the headset's
+//! microphone delivered sound for the first recording and then hardly any for
+//! every later one.
 
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use dutch_flashcards_core::paths::Paths;
@@ -60,13 +66,38 @@ impl FlashcardsApp {
         self.speak(text, self.current_voice(), Speed::Normal, cx);
     }
 
-    /// Shows "speelt af" until the sound of `ticket` has played for `length`.
+    /// Shows "speelt af" until the sound of `ticket`, `length` long, has played.
     fn mark_playing(&mut self, ticket: u64, length: Duration, cx: &mut Context<Self>) {
         self.sound.playing = true;
-        self.after(length + Duration::from_millis(150), cx, move |this, _| {
-            if this.sound.ticket == ticket {
+        self.release_when_played(ticket, length, cx);
+    }
+
+    /// Closes the sound device once the sound of `ticket`, `length` long, has played.
+    fn release_when_played(&mut self, ticket: u64, length: Duration, cx: &mut Context<Self>) {
+        let deadline = Instant::now() + length + OVERRUN;
+        self.release_after(ticket, length + Duration::from_millis(150), deadline, cx);
+    }
+
+    /// After `wait`, closes the sound device if nothing plays on it, and
+    /// clears "speelt af" if `ticket` is still the latest sound. While that
+    /// sound still plays it looks again, until `deadline`; a newer sound
+    /// closes the device itself once it ends.
+    fn release_after(&mut self, ticket: u64, wait: Duration, deadline: Instant, cx: &mut Context<Self>) {
+        self.after(wait, cx, move |this, cx| {
+            let latest = this.sound.ticket == ticket;
+            if this.sound.output.is_playing() {
+                if !latest {
+                    return;
+                }
+                if Instant::now() < deadline {
+                    return this.release_after(ticket, Duration::from_millis(250), deadline, cx);
+                }
+                logging::warn("Geluid: het geluid speelt langer dan verwacht; het geluidsapparaat wordt toch gesloten");
+            }
+            if latest {
                 this.sound.playing = false;
             }
+            this.sound.output.close("afgespeeld");
         });
     }
 
@@ -81,23 +112,34 @@ impl FlashcardsApp {
             .detach();
     }
 
-    pub fn stop_audio(&mut self) {
+    /// Stops any sound and closes the sound device; `why` goes in the log.
+    pub fn stop_audio(&mut self, why: &str) {
         self.sound.ticket += 1;
         self.sound.playing = false;
-        self.sound.output.stop();
+        self.sound.output.close(why);
     }
 
     /// Plays a recording, saying `what` it is.
     pub fn play_file(&mut self, path: &Path, what: &'static str, cx: &mut Context<Self>) {
+        self.sound.ticket += 1;
+        self.sound.playing = false;
+        let ticket = self.sound.ticket;
         match self.sound.output.play(path) {
-            Ok(_) => self.info(what, cx),
+            Ok(length) => {
+                self.info(what, cx);
+                self.release_when_played(ticket, length, cx);
+            }
             Err(err) => self.error(format!("{err:#}")),
         }
         cx.notify();
     }
 }
 
-/// The sound device, opened on first use.
+/// How long past its expected length a sound may still play before the
+/// device is closed anyway, such as when a stalled headset stops taking sound.
+const OVERRUN: Duration = Duration::from_secs(5);
+
+/// The sound device, open while something plays.
 #[derive(Default)]
 struct Output {
     sink: Option<rodio::MixerDeviceSink>,
@@ -112,8 +154,7 @@ impl Output {
     /// Returns how long the sound lasts.
     fn play(&mut self, path: &Path) -> Result<Duration> {
         if self.failed.swap(false, Ordering::Relaxed) {
-            logging::info("Geluid: het geluidsapparaat opnieuw openen na een fout");
-            self.sink = None;
+            self.close("fout van het geluidsapparaat");
         }
         self.stop();
         let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
@@ -126,7 +167,23 @@ impl Output {
         let player = rodio::Player::connect_new(sink.mixer());
         player.append(source);
         (self.sink, self.player) = (Some(sink), Some(player));
+        let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+        logging::info(format!("Geluid: speelt {name} ({:.1} s)", length.as_secs_f32()));
         Ok(length)
+    }
+
+    /// Whether a sound is still playing.
+    fn is_playing(&self) -> bool {
+        self.player.as_ref().is_some_and(|player| !player.empty())
+    }
+
+    /// Stops any sound and closes the device, logging `why` if it was open.
+    fn close(&mut self, why: &str) {
+        self.stop();
+        let Some(sink) = self.sink.take() else { return };
+        let started = Instant::now();
+        drop(sink);
+        logging::info(format!("Geluid: geluidsapparaat gesloten ({why}, {} ms)", started.elapsed().as_millis()));
     }
 
     /// The default output device, reporting its errors to the log and to `failed`.
@@ -147,6 +204,7 @@ impl Output {
             })
             .context("Geen geluidsapparaat gevonden")?;
         sink.log_on_drop(false);
+        logging::info(format!("Geluid: geluidsapparaat geopend ({:?})", sink.config()));
         Ok(sink)
     }
 
