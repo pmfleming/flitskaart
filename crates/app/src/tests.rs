@@ -127,22 +127,23 @@ fn settings_and_the_microphone_test(cx: &mut TestAppContext) {
     assert_eq!(app.read(cx, |app| app.store.settings().unwrap().new_per_day), 10, "saved as it changes");
 }
 
-/// Stands in for Claude Code: always corrects "heb … gegaan" and asks what was
-/// bought; asked for cards, makes one of the correction.
+/// Stands in for Claude Code: always corrects "heb … gegaan", notes "market" as
+/// English and "dit weekend" as not understood, and asks what was bought;
+/// asked for cards, makes one of the correction.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 cat > /dev/null
 case "$*" in
   *'"cards"'*) echo '{"is_error":false,"result":"","structured_output":{"cards":[{"dutch":"Ik ben naar de markt gegaan.","english":"I went to the market.","note":"Bij gaan hoort zijn.","tag":"grammatica"}]}}' ;;
-  *) echo '{"is_error":false,"result":"","structured_output":{"corrected":"Ik ben naar de markt gegaan.","explanation":"Bij gaan hoort zijn.","reply":"Leuk! Wat heb je gekocht?","reply_english":"Nice! What did you buy?"}}' ;;
+  *) echo '{"is_error":false,"result":"","structured_output":{"corrected":"Ik ben naar de markt gegaan.","explanation":"Bij gaan hoort zijn.","english_used":[{"english":"market","dutch":"de markt"}],"not_understood":["dit weekend"],"reply":"Leuk! Wat heb je gekocht?","reply_english":"Nice! What did you buy?"}}' ;;
 esac
 "#;
 
-/// Gesprek: a failed start, then a conversation whose correction and opened
-/// meaning become drafts when it ends.
+/// Gesprek: a failed start, then a conversation whose English, unclear words,
+/// opened meaning and correction become drafts when it ends; every piece plays.
+
 #[gpui_kit::test]
 fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
     use std::os::unix::fs::PermissionsExt as _;
-
     let app = Harness::open(cx);
     let program = app.dir.path().join("claude");
     std::fs::write(&program, FAKE_CLAUDE).unwrap();
@@ -156,17 +157,20 @@ fn a_conversation_becomes_cards(cx: &mut TestAppContext) {
     app.act(cx, |app, _, _| app.claude.program = program);
     app.click(cx, ["topic-Het weekend".into()]);
     assert_eq!(app.read(cx, |app| app.talk.current.as_ref().map(|c| (c.topic.clone(), c.lines.len()))), Some(("Het weekend".into(), 1)));
-    app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Ik heb naar de markt gegaan", window, cx)));
+    app.act(cx, |app, window, cx| app.talk.message.update(cx, |field, cx| field.set_value("Ik heb naar de market gegaan", window, cx)));
     app.click(cx, ["talk-send".into()]);
     let corrected = app.read(cx, |app| app.talk.current.as_ref().unwrap().lines[1].corrected.clone());
     assert_eq!(corrected.as_deref(), Some("Ik ben naar de markt gegaan."));
     let field = app.read(cx, |app| app.talk.message.clone());
     assert!(cx.read(|cx| field.read(cx).value().is_empty()) && app.read(cx, |app| app.talk.pending.is_none()), "sent and answered");
-    app.click(cx, [row("line-meaning", 2)]);
-    assert_eq!(app.read(cx, |app| app.talk.current.as_ref().unwrap().difficult()), 2, "the correction and the opened meaning");
+    app.click(cx, ["line-0".into(), "line-1-play".into(), "english-1-0".into(), "unclear-0-0".into(), row("line-slow", 2)]);
+    assert!(app.read(cx, |app| app.notice.as_ref().is_some_and(|n| n.is_error)), "each tries to play; no voice is installed here");
+    assert_eq!(app.read(cx, |app| app.talk.current.as_ref().unwrap().gaps()), 2, "the English and the unclear words");
+    app.click(cx, [row("line-meaning", 2), row("line-meaning", 2)]);
+    assert_eq!(app.read(cx, |app| app.talk.current.as_ref().unwrap().gaps()), 3, "and the meaning, even closed again");
 
     app.click(cx, ["talk-finish".into()]);
     assert_eq!(app.read(cx, |app| (app.screen, app.drafts.len(), app.talk.current.is_none())), (Screen::Drafts, 1, true));
     let source = app.read(cx, |app| app.drafts[0].snippet_id.and_then(|id| app.store.snippet(id).unwrap()).unwrap());
-    assert!(source.starts_with("Gesprek over: Het weekend") && source.contains("Correctie: Ik ben naar de markt gegaan."), "{source}");
+    assert!(source.starts_with("Gesprek over: Het weekend") && source.contains("In het Engels gezegd: market = de markt"), "{source}");
 }

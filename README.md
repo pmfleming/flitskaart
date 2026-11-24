@@ -60,28 +60,37 @@ day (10 by default, set in Instellingen).
 
 ## Gesprek
 
-Practise speaking about a topic. Pick one of the suggested topics, type your
-own, or leave it open. Claude plays the other person and opens the
-conversation; the Dutch voice reads every line out loud.
+Practise speaking about a topic. Pick one of the topic tiles, type your own, or
+leave it open. Claude plays the other person and opens the conversation; the
+Dutch voice reads every line out loud. The buttons are icons, and each one
+names itself when you hover over it.
 
-Answer each line by typing (`Enter` sends) or with **Spreek**. Recording stops
-by itself when you finish, and Whisper writes down what you said. Either way
-your sentence comes back corrected with the next line. A correction shows what
-you said struck through, then how a Dutch speaker would say it, with the
-changed words underlined and a short explanation. English words you didn't
-know the Dutch for are put into Dutch. When you spoke, punctuation and
-capitals aren't corrected.
+Answer each line by typing (`Enter` or the send button) or with the
+speech-bubble button. Recording stops by itself when you finish, and Whisper
+writes down what you said. Either way your sentence comes back corrected with
+the next line. A correction shows what you said struck through, then how a
+Dutch speaker would say it, with the changed words underlined and a short
+explanation by the light bulb. When you spoke, punctuation and capitals aren't
+corrected.
 
-Each line has **Hoor** and **Langzaam**. Claude's lines also have
-**Betekenis** for the English. **Moeilijk** marks a line to become a card.
-Corrected sentences and lines whose meaning you opened are marked already;
-click to unmark them.
+Don't know a word? Say it in English: the correction puts it into Dutch, and a
+chip marked EN under your sentence shows the Dutch word. Didn't understand
+Claude? Say so ("Wat betekent dat?", "Sorry?") and Claude says it again more
+simply; the words you missed get a chip with a question mark. Or open
+**Betekenis** (the two cards) for the English. Whisper listens for Dutch, so an
+English word you *speak* may be heard wrongly; typed English always works.
 
-**Afronden** saves the conversation and has Claude draft cards from the marked
-lines: the corrected sentence for your own lines, and the sentence or the hard
-phrase for Claude's. They go to Concepten like any other drafts, and **Bron**
-shows the whole conversation. If nothing was marked, the conversation is saved
-without cards. A conversation in progress is lost if you close the app.
+Every piece of Dutch plays: click a sentence (or the ear before it), the snail
+to hear it slowly, or a chip to hear that word. For your own lines, the
+corrected sentence is what plays.
+
+Sentences aren't rated. **Afronden** (the card stack, with a count) saves the
+conversation and has Claude draft cards from what you didn't know: the Dutch
+for what you said in English, the lines or words you didn't understand, and
+your corrected mistakes. The cards go to Concepten like any other drafts, and
+**Bron** shows the whole conversation with those notes. If there was nothing,
+the conversation is saved without cards. A conversation in progress is lost if
+you close the app.
 
 ## Screens
 
@@ -152,7 +161,7 @@ words right, while the female voices built from audiobook recordings (MLS) got
 - `crates/core` – cards, FSRS scheduling, the Turso store, Piper voices and
   drafting. No UI code; tested with `cargo test`.
 - `crates/app` – the window, built with [GPUI Community Edition](https://gpui-ce.github.io)
-  and its component kit. The study panel's own icons are in `crates/app/assets/icons`.
+  and its component kit. Its icons are drawn for this app, in `crates/app/assets/icons`.
   `src/tests.rs` drives the whole app in GPUI's headless test window (an empty
   deck, no voices or Whisper), so `cargo test` covers the screens too.
 - `scripts/capture.sh` – runs the app in a headless Weston session and saves a
