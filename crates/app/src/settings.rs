@@ -3,7 +3,7 @@
 
 use dutch_flashcards_core::store::Appearance;
 use dutch_flashcards_core::voice::{self, Gender, SAMPLE, Speed, VoiceOption};
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -13,7 +13,7 @@ use gpui_kit::{
 
 use crate::app::FlashcardsApp;
 use crate::icons;
-use crate::ui::{hint, section, segment_button, segmented_bar, surface};
+use crate::ui::{explained, hint, icon_button, section, segment_button, segmented_bar, surface};
 
 /// The microphone & speech section is the second item inside Instellingen.
 pub const MICROPHONE_SECTION: usize = 1;
@@ -50,17 +50,19 @@ impl FlashcardsApp {
     }
 
     pub fn render_settings(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let appearance_card = section("Weergave", "Systeem volgt de lichte of donkere stand van je bureaublad.", cx)
+        let appearance_icons = [icons::system, icons::light, icons::dark];
+        let appearance_card = section(icons::light(), "Weergave", cx)
             .flex_1()
             .min_w(px(280.))
             .child(h_flex().child(segmented_bar(cx).children(Appearance::ALL.map(|appearance| {
-                segment_button(appearance.as_str(), appearance.label(), self.settings.appearance == appearance, cx).on_click(
-                    cx.listener(move |this, _, window, cx| this.set_appearance(appearance, window, cx)),
-                )
+                segment_button(appearance.as_str(), appearance.label(), self.settings.appearance == appearance, cx)
+                    .icon(appearance_icons[appearance as usize]())
+                    .when(appearance == Appearance::System, |b| b.tooltip("Volgt je bureaublad"))
+                    .on_click(cx.listener(move |this, _, window, cx| this.set_appearance(appearance, window, cx)))
             }))));
 
         let per_day = self.settings.new_per_day;
-        let limit_card = section("Nieuwe kaarten per dag", "Herhalingen komen altijd.", cx)
+        let limit_card = section(icons::per_day(), "Nieuw per dag", cx)
             .flex_1()
             .min_w(px(240.))
             .child(
@@ -71,20 +73,35 @@ impl FlashcardsApp {
                         Button::new("fewer")
                             .outline()
                             .small()
+                            .icon(icons::minus())
+                            .tooltip("Minder")
                             .disabled(per_day == 0)
-                            .label("−")
                             .on_click(cx.listener(|this, _, _, cx| this.change_new_per_day(-1, cx))),
                     )
-                    .child(div().w(px(44.)).text_center().text_lg().font_weight(FontWeight::SEMIBOLD).child(per_day.to_string()))
+                    .child(
+                        explained("per-day", "Nieuwe kaarten per dag. Herhalingen komen altijd.")
+                            .w(px(44.))
+                            .text_center()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(per_day.to_string()),
+                    )
                     .child(
                         Button::new("more")
                             .outline()
                             .small()
+                            .icon(icons::plus())
+                            .tooltip("Meer")
                             .disabled(per_day >= 100)
-                            .label("+")
                             .on_click(cx.listener(|this, _, _, cx| this.change_new_per_day(1, cx))),
                     ),
             );
+        let data_card = section(icons::folder(), "Gegevens", cx).child(
+            explained("data-folder", "Hier staan je kaarten en geluid")
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(self.paths.root().display().to_string()),
+        );
 
         v_flex()
             .id("settings")
@@ -102,7 +119,7 @@ impl FlashcardsApp {
                     .child(self.render_voices(cx))
                     .child(self.render_mic_test(cx))
                     .child(h_flex().flex_wrap().items_stretch().gap_4().child(appearance_card).child(limit_card))
-                    .child(section("Gegevens", format!("Je kaarten en geluid staan in {}", self.paths.root().display()), cx)),
+                    .child(data_card),
             )
     }
 
@@ -113,10 +130,10 @@ impl FlashcardsApp {
             segment_button(g.as_str(), g.label(), gender == g, cx).on_click(cx.listener(move |this, _, _, cx| this.set_gender(g, cx)))
         })));
         let missing = voice::VOICES.iter().any(|v| !self.sound.speaker.is_installed(v));
-        section("Stem", "Kies een mannen- of vrouwenstem. Pim, Ronnie en Alex spreken Nederlands uit Nederland, Nathalie spreekt Vlaams.", cx)
+        section(icons::voice(), "Stem", cx)
             .child(genders)
             .child(v_flex().gap_1p5().children(voice::voices_for(gender).map(|option| self.render_voice(option, cx)).collect::<Vec<_>>()))
-            .when(missing, |d| d.child(hint("Ontbrekende stemmen installeer je met scripts/fetch-models.sh.", cx)))
+            .when(missing, |d| d.child(hint("Ontbrekende stemmen: scripts/fetch-models.sh", cx)))
     }
 
     fn render_voice(&self, option: &'static VoiceOption, cx: &mut Context<Self>) -> Div {
@@ -168,11 +185,7 @@ impl FlashcardsApp {
             .when(installed && !chosen, |d| d.hover(move |s| s.bg(theme.muted)))
             .child(select_area)
             .child(
-                Button::new(SharedString::from(format!("try-{}", option.id)))
-                    .ghost()
-                    .small()
-                    .icon(icons::listen())
-                    .label("Probeer")
+                icon_button(SharedString::from(format!("try-{}", option.id)), icons::listen(), "Probeer")
                     .disabled(!installed)
                     .on_click(cx.listener(move |this, _, _, cx| this.speak(SAMPLE.into(), option, Speed::Normal, cx))),
             )

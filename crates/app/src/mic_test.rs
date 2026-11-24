@@ -17,7 +17,7 @@ use crate::app::FlashcardsApp;
 use crate::capture::Capture;
 use crate::icons;
 use crate::recorder::{Captured, Loudness};
-use crate::ui::{card_box, heading, hint};
+use crate::ui::{card_box, explained, hint, titled};
 
 /// A sentence to say during the test.
 const TEST_SENTENCE: &str = "Goedemorgen, hoe gaat het met je?";
@@ -75,8 +75,8 @@ impl MicTest {
     fn button_label(&self) -> &'static str {
         match (self.capture.is_on(), self.result.is_some()) {
             (true, _) => "Stop",
-            (false, true) => "Opnieuw testen",
-            (false, false) => "Test de microfoon",
+            (false, true) => "Opnieuw",
+            (false, false) => "Test",
         }
     }
 
@@ -86,7 +86,7 @@ impl MicTest {
             return Some("Even luisteren…".into());
         }
         let heard = self.result.as_ref()?.heard.as_deref()?;
-        Some(if heard.is_empty() { "De app hoorde geen woorden.".into() } else { format!("De app hoorde: {heard}") })
+        Some(if heard.is_empty() { "Geen woorden gehoord.".into() } else { format!("“{heard}”") })
     }
 
     /// Where the sound comes from when PipeWire can't say.
@@ -178,25 +178,27 @@ impl FlashcardsApp {
         let test = &self.mic_test;
         let recording = test.capture.is_on();
         let whisper_ready = self.listener.is_installed();
-        let whisper_badge = h_flex()
+        let whisper_color = if whisper_ready { theme.success } else { theme.danger };
+        let whisper_badge = explained("whisper", "Whisper luistert op deze laptop en geeft je uitspraak in Oefenen een cijfer van 1 tot 4.")
+            .flex()
             .items_center()
             .gap_1p5()
             .px_2p5()
             .py(px(3.))
             .rounded_full()
-            .bg(if whisper_ready { theme.success.opacity(0.14) } else { theme.danger.opacity(0.14) })
-            .child(div().size(px(7.)).rounded_full().bg(if whisper_ready { theme.success } else { theme.danger }))
+            .bg(whisper_color.opacity(0.14))
+            .child(div().size(px(7.)).rounded_full().bg(whisper_color))
             .child(
                 div()
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(if whisper_ready { theme.success } else { theme.danger })
-                    .child(if whisper_ready { "Whisper geïnstalleerd" } else { "Whisper ontbreekt" }),
+                    .text_color(whisper_color)
+                    .child(if whisper_ready { "Whisper" } else { "Whisper ontbreekt" }),
             );
 
         let mut test_button = Button::new("mic-test")
             .outline()
-            .icon(icons::speak())
+            .icon(if recording { icons::stop() } else { icons::microphone() })
             .label(test.button_label())
             .disabled(test.transcribing || (!recording && self.busy_listening()))
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -207,15 +209,22 @@ impl FlashcardsApp {
         }
         let play_button = Button::new("mic-test-play")
             .outline()
-            .icon(icons::listen())
-            .label("Hoor wat de computer hoorde")
+            .icon(icons::playback())
+            .tooltip("Hoor wat de computer hoorde")
             .disabled(recording || !test.result.as_ref().is_some_and(|result| result.saved))
             .on_click(cx.listener(|this, _, _, cx| this.play_file(&this.mic_test_path(), "Je hoort nu wat de computer hoorde.", cx)));
         let status = match test.capture.render("Zeg iets.", cx) {
             Some(meter) => Some(meter.into_any_element()),
             None => test.result.as_ref().map(|result| self.render_mic_result(result, cx)),
         };
-        let explanation = format!("Neem een paar woorden op en luister terug wat de computer hoorde. Zeg bijvoorbeeld: “{TEST_SENTENCE}”");
+        let sample = explained("mic-sample", "Zeg bijvoorbeeld")
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child(icons::speak().size_4().flex_none())
+            .child(div().italic().child(format!("“{TEST_SENTENCE}”")));
 
         card_box(cx)
             .p_4()
@@ -223,24 +232,18 @@ impl FlashcardsApp {
             .child(
                 v_flex()
                     .gap_1()
-                    .child(h_flex().justify_between().items_center().flex_wrap().gap_2().child(heading("Microfoon & uitspraak")).child(whisper_badge))
-                    .child(hint(
-                        "Whisper luistert op deze laptop en geeft je uitspraak in Oefenen een cijfer van 1 tot 4.",
-                        cx,
-                    ))
-                    .when(!whisper_ready, |d| {
-                        d.child(hint("Installeer spraakherkenning met scripts/fetch-models.sh.", cx).text_color(theme.danger))
-                    }),
+                    .child(h_flex().justify_between().items_center().flex_wrap().gap_2().child(titled(icons::microphone(), "Microfoon & uitspraak", cx)).child(whisper_badge))
+                    .when(!whisper_ready, |d| d.child(hint("Installeer spraakherkenning: scripts/fetch-models.sh", cx).text_color(theme.danger))),
             )
             .child(self.render_inputs(cx))
             .child(self.render_boost(cx))
             .child(
                 v_flex()
                     .gap_2p5()
-                    .pt_2()
+                    .pt_3()
                     .border_t_1()
                     .border_color(theme.border)
-                    .child(hint(explanation, cx))
+                    .child(sample)
                     .child(h_flex().gap_2().flex_wrap().child(test_button).child(play_button))
                     .children(status)
                     .children(test.error.clone().map(|text| hint(text, cx).text_color(theme.danger))),
@@ -261,22 +264,24 @@ impl FlashcardsApp {
                 .text_color(if active { theme.primary } else { theme.muted_foreground })
                 .child(boost_label(boost))
         }));
-        let slider = v_flex()
+        let name = explained("boost", "Maakt de opname harder of zachter voordat de app luistert. Bij 1× blijft hij zoals hij is.")
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(icons::boost().size_4().text_color(theme.muted_foreground))
+            .child(div().font_weight(FontWeight::MEDIUM).child("Versterking"));
+        v_flex()
             .gap_1p5()
             .w(px(360.))
             .child(
                 h_flex()
                     .justify_between()
                     .items_center()
-                    .child(div().font_weight(FontWeight::MEDIUM).child("Versterking"))
+                    .child(name)
                     .child(div().font_weight(FontWeight::SEMIBOLD).text_color(theme.primary).child(boost_label(current))),
             )
             .child(Slider::new(&self.mic_test.boost_slider).disabled(self.mic_test.capture.is_on()))
-            .child(ticks);
-        v_flex()
-            .gap_1p5()
-            .child(slider)
-            .child(hint("Maakt de opname harder of zachter voordat de app luistert. Bij 1× blijft hij zoals hij is.", cx))
+            .child(ticks)
     }
 
     /// Which microphone the sound comes from, and which others there are.
@@ -288,8 +293,8 @@ impl FlashcardsApp {
             Some(input) => h_flex()
                 .gap_2()
                 .flex_wrap()
-                .items_baseline()
-                .child(hint("Geluid komt van", cx))
+                .items_center()
+                .child(explained("mic-source", "Geluid komt van").text_color(theme.muted_foreground).child(icons::microphone().size_4()))
                 .child(div().font_weight(FontWeight::SEMIBOLD).child(input.label.clone()))
                 .child(hint(input.describe(), cx).when(muted, |d| d.text_color(theme.danger))),
             None => h_flex().child(hint("Er is geen standaardmicrofoon gekozen in je systeeminstellingen.", cx).text_color(theme.danger)),
@@ -300,10 +305,14 @@ impl FlashcardsApp {
             .child(source)
             .when(muted, |d| d.child(hint("Deze microfoon staat gedempt. Zet hem aan in je systeeminstellingen.", cx).text_color(theme.danger)))
             .when(!others.is_empty(), |d| {
-                d.child(hint(format!("Ook aangesloten: {}.", others.join("; ")), cx)).child(hint(
-                    "Een andere microfoon kies je in de geluidsinstellingen van je systeem; de app gebruikt de standaardmicrofoon.",
-                    cx,
-                ))
+                d.child(
+                    explained("mic-others", "Een andere microfoon kies je in de geluidsinstellingen van je systeem; de app gebruikt de standaardmicrofoon.")
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(icons::tip().size_4().flex_none().text_color(theme.muted_foreground))
+                        .child(hint(format!("Ook aangesloten: {}", others.join("; ")), cx)),
+                )
             })
             .into_any_element()
     }
@@ -324,7 +333,14 @@ impl FlashcardsApp {
                     .child(div().flex_none().size(px(10.)).rounded_full().bg(color))
                     .child(div().font_weight(FontWeight::MEDIUM).child(result.loudness.verdict())),
             )
-            .children(self.mic_test.heard().map(|text| hint(text, cx)))
+            .children(self.mic_test.heard().map(|text| {
+                explained("mic-heard", "De app hoorde")
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(icons::transcript().size_4().flex_none().text_color(theme.muted_foreground))
+                    .child(hint(text, cx))
+            }))
             .into_any_element()
     }
 }

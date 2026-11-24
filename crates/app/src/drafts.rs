@@ -3,16 +3,16 @@
 use dutch_flashcards_core::{Card, CardId};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::{ActiveTheme as _, Colorize as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Colorize as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, Context, Div, ElementId, Entity, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
+    App, AppContext as _, Context, Div, ElementId, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 
-use crate::app::{FlashcardsApp, Screen};
+use crate::app::{FlashcardsApp, Screen, go_buttons};
 use crate::icons;
-use crate::ui::{card_box, empty_state, field_label, heading, hint};
+use crate::ui::{card_box, empty_state, explained, icon_button, stat, titled};
 
 /// One draft with its editable fields.
 pub struct DraftRow {
@@ -51,29 +51,28 @@ impl DraftRow {
         [&self.dutch, &self.english, &self.note, &self.tags].map(|state| state.read(cx).value().to_string())
     }
 
-    /// The Dutch and the note, and the translation when `english` is on, each labeled.
+    /// The Dutch, the note, the translation when `english` is on, and the
+    /// topic, each marked by its icon.
     pub fn fields(&self, english: bool, cx: &App) -> Div {
+        let id = self.id as u64;
+        let mark = |name: &'static str, icon: Icon, tip: &'static str| {
+            explained((name, id), tip).flex_none().text_color(cx.theme().muted_foreground).child(icon.size_4())
+        };
         v_flex()
-            .gap_2p5()
-            .child(v_flex().gap_1().child(field_label("Nederlands", cx)).child(Input::new(&self.dutch).large()))
-            .child(v_flex().gap_1().child(field_label("Uitleg (optioneel)", cx)).child(Input::new(&self.note)))
-            .when(english, |d| {
-                d.child(v_flex().gap_1().child(field_label("Vertaling", cx)).child(Input::new(&self.english)))
-            })
+            .gap_2()
+            .child(Input::new(&self.dutch).large().prefix(mark("field-dutch", icons::dutch(), "Nederlands")))
+            .child(Input::new(&self.note).prefix(mark("field-note", icons::tip(), "Uitleg (optioneel)")))
+            .when(english, |d| d.child(Input::new(&self.english).prefix(mark("field-english", icons::meaning(), "Vertaling"))))
+            .child(div().w(px(280.)).child(Input::new(&self.tags).small().prefix(mark("field-tag", icons::tag(), "Onderwerp"))))
     }
 
     /// Reads the Dutch as typed so far.
     pub fn listen_button(&self, id: impl Into<ElementId>, cx: &mut Context<FlashcardsApp>) -> Button {
         let dutch = self.dutch.clone();
-        Button::new(id)
-            .ghost()
-            .small()
-            .icon(icons::listen())
-            .label("Luister")
-            .on_click(cx.listener(move |this, _, _, cx| {
-                let text = dutch.read(cx).value().to_string();
-                this.say(text, cx);
-            }))
+        icon_button(id, icons::listen(), "Luister").on_click(cx.listener(move |this, _, _, cx| {
+            let text = dutch.read(cx).value().to_string();
+            this.say(text, cx);
+        }))
     }
 }
 
@@ -153,32 +152,28 @@ impl FlashcardsApp {
                         .max_w(px(520.))
                         .px_6()
                         .pb_6()
+                        .gap_4()
                         .items_center()
-                        .child(empty_state("Geen concepten", "Plak een stuk van een gesprek bij Toevoegen om kaarten te maken.", cx))
-                        .child(
-                            Button::new("drafts-empty-add")
-                                .primary()
-                                .label("Kaarten toevoegen")
-                                .on_click(cx.listener(|this, _, window, cx| this.show(Screen::Add, window, cx))),
-                        ),
+                        .child(empty_state(icons::drafts(), "Geen concepten", "Nieuwe kaarten wachten hier tot je ze bewaart.", cx))
+                        .child(h_flex().gap_2().children(go_buttons(vec![Screen::Talk, Screen::Add], cx))),
                 )
                 .into_any_element();
         }
+        let theme = cx.theme().clone();
         let total = self.drafts.len();
         let duplicates = self.drafts.iter().filter(|r| r.duplicate).count();
-        let subtitle = if duplicates > 0 {
-            format!("Controleer elke kaart voordat hij in je stapel komt · {duplicates} mogelijk dubbel.")
-        } else {
-            "Controleer elke kaart voordat hij in je stapel komt.".to_string()
-        };
         let rows: Vec<_> = self.drafts.iter().map(|row| self.render_draft_row(row, cx)).collect();
-        let title = v_flex()
-            .gap_0p5()
-            .child(heading(if total == 1 { "1 concept".to_string() } else { format!("{total} concepten") }))
-            .child(hint(subtitle, cx));
+        let title = h_flex()
+            .items_center()
+            .gap_3()
+            .child(titled(icons::drafts(), if total == 1 { "1 concept".to_string() } else { format!("{total} concepten") }, cx))
+            .when(duplicates > 0, |d| {
+                d.child(stat("duplicates", icons::duplicate(), duplicates.to_string(), "Mogelijk dubbel", cx).text_color(theme.warning))
+            });
         let accept_all = Button::new("accept-all")
             .primary()
-            .label(format!("Alles bewaren ({total})"))
+            .icon(icons::check_all())
+            .label(format!("Bewaar alle {total}"))
             .on_click(cx.listener(|this, _, _, cx| this.accept_all(cx)));
         v_flex()
             .size_full()
@@ -204,32 +199,11 @@ impl FlashcardsApp {
     fn render_draft_row(&self, row: &DraftRow, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
         let source = row.snippet_id.filter(|_| row.show_source).and_then(|id| self.store.snippet(id).ok().flatten());
-        let tags = v_flex()
-            .gap_1()
-            .w(px(280.))
-            .child(field_label("Onderwerp", cx))
-            .child(Input::new(&row.tags).small());
-        let duplicate_banner = row.duplicate.then(|| {
-            h_flex()
-                .items_center()
-                .gap_2()
-                .px_3()
-                .py_1p5()
-                .rounded(px(6.))
-                .border_1()
-                .border_color(theme.warning.opacity(0.45))
-                .bg(theme.warning.opacity(0.14))
-                .child(div().flex_none().size(px(8.)).rounded_full().bg(theme.warning))
-                .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(theme.foreground).child("Mogelijk dubbel:"))
-                .child(div().text_sm().text_color(theme.foreground).child("deze zin staat al in je stapel of bij de concepten."))
-        });
         card_box(cx)
             .p_4()
             .gap_3()
             .when(row.duplicate, |d| d.border_color(theme.warning.opacity(0.65)))
-            .children(duplicate_banner)
             .child(row.fields(row.show_english, cx))
-            .child(tags)
             .when_some(source, |d, text| {
                 d.child(
                     div()
@@ -249,44 +223,42 @@ impl FlashcardsApp {
     /// Inspection tools on the left; discard/keep decisions cleanly separated on the right.
     fn render_draft_buttons(&self, row: &DraftRow, cx: &mut Context<Self>) -> impl IntoElement {
         let id = row.id;
-        let english_label = if row.show_english { "Verberg vertaling" } else { "Vertaling" };
-        let source_label = if row.show_source { "Verberg bron" } else { "Bron" };
-        let mut english_btn = Button::new(("english", id as u64))
-            .ghost()
-            .small()
-            .icon(icons::meaning())
-            .label(english_label)
+        let theme = cx.theme().clone();
+        let toggle = |name: &'static str, icon: Icon, (show, hide): (&'static str, &'static str), on: bool| {
+            icon_button((name, id as u64), icon, if on { hide } else { show }).selected(on)
+        };
+        let english_btn = toggle("english", icons::meaning(), ("Vertaling", "Verberg vertaling"), row.show_english)
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_draft(id, |row| &mut row.show_english, cx)));
-        if row.show_english {
-            english_btn = english_btn.outline().primary();
-        }
-        let mut source_btn = Button::new(("source", id as u64))
-            .ghost()
-            .small()
-            .label(source_label)
+        let source_btn = toggle("source", icons::source(), ("Bron", "Verberg bron"), row.show_source)
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_draft(id, |row| &mut row.show_source, cx)));
-        if row.show_source {
-            source_btn = source_btn.outline().primary();
-        }
+        let duplicate = row.duplicate.then(|| {
+            explained(("duplicate", id as u64), "Deze zin staat al in je stapel of bij de concepten.")
+                .flex()
+                .items_center()
+                .gap_1()
+                .ml_2()
+                .text_xs()
+                .text_color(theme.warning)
+                .child(icons::duplicate().size_4())
+                .child("Mogelijk dubbel")
+        });
         let inspect = h_flex()
-            .gap_1p5()
+            .gap_1()
+            .items_center()
             .flex_wrap()
             .child(row.listen_button(("listen", id as u64), cx))
             .child(english_btn)
-            .when(row.snippet_id.is_some(), |d| d.child(source_btn));
+            .when(row.snippet_id.is_some(), |d| d.child(source_btn))
+            .children(duplicate);
         let decide = h_flex()
             .gap_2()
-            .child(
-                Button::new(("discard", id as u64))
-                    .ghost()
-                    .small()
-                    .label("Weggooien")
-                    .on_click(cx.listener(move |this, _, _, cx| this.discard_draft(id, cx))),
-            )
+            .items_center()
+            .child(icon_button(("discard", id as u64), icons::trash(), "Weggooien").on_click(cx.listener(move |this, _, _, cx| this.discard_draft(id, cx))))
             .child(
                 Button::new(("accept", id as u64))
                     .primary()
                     .small()
+                    .icon(icons::check())
                     .label("Bewaar")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if this.accept_draft(id, cx) {
@@ -297,7 +269,7 @@ impl FlashcardsApp {
         h_flex()
             .pt_2()
             .border_t_1()
-            .border_color(cx.theme().border)
+            .border_color(theme.border)
             .justify_between()
             .items_center()
             .flex_wrap()

@@ -10,7 +10,7 @@ use dutch_flashcards_core::store::{Appearance, Settings};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::theme::{Theme, ThemeMode};
-use gpui_kit::component::{ActiveTheme as _, Colorize as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Colorize as _, Icon, h_flex, v_flex};
 use gpui_kit::{
     Context, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, ScrollHandle, SharedString,
     Styled as _, Subscription, Window, div, px,
@@ -23,7 +23,8 @@ use crate::drafts::DraftRow;
 use crate::mic_test::MicTest;
 use crate::study::StudyState;
 use crate::talk::TalkState;
-use crate::ui::{apply_palette, surface};
+use crate::icons;
+use crate::ui::{apply_palette, icon_button, surface};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
@@ -41,6 +42,10 @@ impl Screen {
 
     pub fn label(self) -> &'static str {
         Screen::LABELS[self as usize]
+    }
+
+    pub fn icon(self) -> Icon {
+        [icons::practice, icons::talk, icons::paste, icons::drafts, icons::deck, icons::sliders][self as usize]()
     }
 
     /// The screen with this label, ignoring case.
@@ -237,7 +242,7 @@ impl FlashcardsApp {
             .selected_index(selected)
             .on_click(cx.listener(|this, index: &usize, window, cx| this.show(Screen::ALL[*index], window, cx)))
             .children(Screen::ALL.map(|screen| {
-                let tab = Tab::new().label(screen.label());
+                let tab = Tab::new().label(screen.label()).prefix(screen.icon().size_4().mr_1p5());
                 match screen {
                     Screen::Drafts if drafts > 0 => {
                         let (bg, fg) = if on_study {
@@ -283,7 +288,7 @@ impl FlashcardsApp {
                 .bg(bg)
                 .child(div().flex_none().size(px(8.)).rounded_full().bg(dot))
                 .child(div().flex_1().text_sm().text_color(text).child(notice.text.clone()))
-                .child(Button::new("dismiss-notice").label("Sluiten").small().ghost().on_click(cx.listener(|this, _, _, cx| {
+                .child(icon_button("dismiss-notice", icons::close(), "Sluiten").on_click(cx.listener(|this, _, _, cx| {
                     this.notice = None;
                     this.notice_ticket += 1;
                     cx.notify();
@@ -312,4 +317,14 @@ impl Render for FlashcardsApp {
             .child(div().flex_1().min_h_0().child(body))
             .children(self.render_notice(cx))
     }
+}
+
+/// Buttons that open other screens, each with that screen's icon; the first is the main one.
+pub fn go_buttons(screens: Vec<Screen>, cx: &mut Context<FlashcardsApp>) -> Vec<Button> {
+    let buttons = screens.into_iter().enumerate().map(|(i, screen)| {
+        let button = Button::new(SharedString::from(format!("go-{}", screen.label()))).icon(screen.icon()).label(screen.label());
+        let button = if i == 0 { button.primary() } else { button.outline() };
+        button.on_click(cx.listener(move |this, _, window, cx| this.show(screen, window, cx)))
+    });
+    buttons.collect()
 }

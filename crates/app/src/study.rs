@@ -1,4 +1,4 @@
-//! Oefenen: one panel per card. Read the Dutch, test your reading, hear the
+//! Oefenen: one panel per car.child(div().when(card.is_new(), |d| d.child(explained("card-new", "Nieuwe kaart").text_color(theme.primary).child(icons::new().size_4())))). Read the Dutch, test your reading, hear the
 //! sentence, look up the meaning, and score how easily it came back.
 
 use dutch_flashcards_core::schedule::{Scheduler, describe_due};
@@ -7,7 +7,7 @@ use dutch_flashcards_core::store::{Counts, Mode, Review};
 use dutch_flashcards_core::voice::Speed;
 use dutch_flashcards_core::{Card, Grade};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Colorize as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Colorize as _, Disableable as _, Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, Context, FocusHandle, FontWeight, HighlightStyle, InteractiveElement as _, IntoElement, KeyDownEvent,
@@ -19,7 +19,10 @@ use crate::app::{FlashcardsApp, Screen};
 use crate::capture::Capture;
 use crate::icons;
 use crate::speaking::grade_color;
-use crate::ui::{card_box, empty_state, hint, keycap, keycap_primary, pill, segment_button, segmented_bar, surface};
+use crate::app::go_buttons;
+use crate::ui::{
+    card_box, empty_state, explained, hint, icon_button, keycap, keycap_primary, pill, segment_button, segmented_bar, stat, surface, tool_button,
+};
 
 pub struct StudyState {
     pub focus: FocusHandle,
@@ -48,16 +51,16 @@ pub struct Attempt {
 }
 
 impl Attempt {
-    /// The reading test button's label.
-    fn test_label(&self) -> &'static str {
+    /// The reading test button's icon and name.
+    fn test_tool(&self) -> (Icon, &'static str) {
         if self.capture.is_on() {
-            "Stop"
+            (icons::stop(), "Stop (Spatie)")
         } else if self.judging {
-            "Even luisteren…"
+            (icons::speak(), "Even luisteren…")
         } else if self.speech.is_some() || self.speech_note.is_some() {
-            "Opnieuw"
+            (icons::speak(), "Opnieuw testen (Spatie)")
         } else {
-            "Test mijn uitspraak"
+            (icons::speak(), "Test mijn uitspraak (Spatie)")
         }
     }
 }
@@ -78,34 +81,35 @@ impl StudyState {
     }
 }
 
-/// What Oefenen says when no card is waiting, and where its button leads.
+/// What Oefenen shows when no card is waiting, and where its buttons lead.
 struct Rest {
+    icon: Icon,
     title: &'static str,
-    detail: String,
-    action: Option<(&'static str, Screen)>,
+    detail: &'static str,
+    /// What was done and what comes next: an icon, a value and what it counts.
+    stats: Vec<(Icon, String, &'static str)>,
+    actions: Vec<Screen>,
 }
 
 impl Rest {
     fn new(deck_size: usize, drafts: usize, reviewed: usize, next_due: Option<String>) -> Rest {
-        let to_drafts = (drafts > 0).then_some(("Naar concepten", Screen::Drafts));
+        let to_drafts = (drafts > 0).then_some(Screen::Drafts).into_iter().collect();
         match (deck_size, drafts) {
             (0, 0) => Rest {
+                icon: icons::deck(),
                 title: "Je stapel is nog leeg",
-                detail: "Plak een stuk van een gesprek met Claude, ChatGPT of Gemini bij Toevoegen. Daar worden kaarten van gemaakt.".into(),
-                action: Some(("Kaarten toevoegen", Screen::Add)),
+                detail: "Begin een gesprek of plak er een.",
+                stats: Vec::new(),
+                actions: vec![Screen::Talk, Screen::Add],
             },
-            (0, _) => Rest {
-                title: "Controleer eerst je concepten",
-                detail: "Er staan kaarten klaar. Bewaar ze, dan kun je ze hier oefenen.".into(),
-                action: to_drafts,
-            },
+            (0, _) => Rest { icon: icons::drafts(), title: "Controleer eerst je concepten", detail: "", stats: Vec::new(), actions: to_drafts },
             _ => {
-                let parts = [
-                    (reviewed > 0).then(|| format!("Je hebt {reviewed} kaarten geoefend.")),
-                    next_due.map(|when| format!("De volgende kaart is {when}.")),
-                    (drafts > 0).then(|| format!("Er wachten {drafts} concepten op controle.")),
+                let stats = [
+                    (reviewed > 0).then(|| (icons::check(), reviewed.to_string(), "Vandaag geoefend")),
+                    next_due.map(|when| (icons::due(), when, "Volgende kaart")),
+                    (drafts > 0).then(|| (icons::drafts(), drafts.to_string(), "Concepten om te controleren")),
                 ];
-                Rest { title: "Klaar voor nu", detail: parts.into_iter().flatten().collect::<Vec<_>>().join(" "), action: to_drafts }
+                Rest { icon: icons::done(), title: "Klaar voor nu", detail: "", stats: stats.into_iter().flatten().collect(), actions: to_drafts }
             }
         }
     }
@@ -245,17 +249,18 @@ impl FlashcardsApp {
     }
 
     fn render_study_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let modes = [(Mode::Read, "Lezen"), (Mode::Listen, "Luisteren")];
+        let modes = [(Mode::Read, "Lezen", icons::read()), (Mode::Listen, "Luisteren", icons::listen())];
         let Counts { due, new } = self.study.counts;
         let has_card = self.study.card.is_some();
-        let mut parts = Vec::new();
-        if has_card || due + new > 0 {
-            parts.push(format!("{due} te herhalen · {new} nieuw"));
-        }
-        if self.study.reviewed_today > 0 {
-            parts.push(format!("{} gedaan", self.study.reviewed_today));
-        }
-        let summary = parts.join(" · ");
+        let done = self.study.reviewed_today;
+        let summary = h_flex()
+            .items_center()
+            .gap_3()
+            .when(has_card || due + new > 0, |d| {
+                d.child(stat("count-due", icons::due(), due.to_string(), "Te herhalen", cx))
+                    .child(stat("count-new", icons::new(), new.to_string(), "Nieuw", cx))
+            })
+            .when(done > 0, |d| d.child(stat("count-done", icons::check(), done.to_string(), "Vandaag geoefend", cx)));
         h_flex()
             .w_full()
             .max_w(px(760.))
@@ -264,21 +269,18 @@ impl FlashcardsApp {
             .items_center()
             .flex_wrap()
             .gap_3()
-            .child(segmented_bar(cx).children(modes.map(|(mode, label)| {
+            .child(segmented_bar(cx).children(modes.map(|(mode, label, icon)| {
                 segment_button(SharedString::from(format!("mode-{label}")), label, self.study.mode == mode, cx)
+                    .icon(icon)
                     .tab_stop(false)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.set_mode(mode, cx);
                         this.study.focus.focus(window, cx);
                     }))
             })))
-            .child(h_flex().items_center().gap_3().child(hint(summary, cx)).when(has_card, |d| {
+            .child(h_flex().items_center().gap_3().child(summary).when(has_card, |d| {
                 d.child(
-                    Button::new("edit")
-                        .ghost()
-                        .small()
-                        .tab_stop(false)
-                        .child(h_flex().gap_1p5().child("Bewerken").child(keycap("B", cx)))
+                    icon_button("edit", icons::edit(), "Bewerken (B)")
                         .on_click(cx.listener(|this, _, window, cx| this.edit_current(window, cx))),
                 )
             }))
@@ -293,6 +295,7 @@ impl FlashcardsApp {
             Button::new("reveal")
                 .primary()
                 .tab_stop(false)
+                .icon(icons::reveal())
                 .child(h_flex().gap_2().child("Toon tekst").child(keycap_primary("Spatie", cx)))
                 .on_click(self.study_click(Self::advance, cx))
                 .into_any_element()
@@ -348,7 +351,7 @@ impl FlashcardsApp {
             .items_center()
             .gap_2()
             .child(div().when(has_tag, |d| d.child(pill(card.tags.clone(), theme.secondary, theme.muted_foreground))))
-            .child(div().when(card.is_new(), |d| d.child(pill("Nieuw", theme.accent, theme.accent_foreground))))
+            .when(card.is_new(), |d| d.child(explained("card-new", "Nieuwe kaart").text_color(theme.primary).child(icons::new().size_4())))
     }
 
     /// The Dutch, with the words the app missed underlined; dots while veiled.
@@ -403,13 +406,11 @@ impl FlashcardsApp {
         let attempt = &self.study.attempt;
         let recording = attempt.capture.is_on();
         let audio_active = self.sound.playing || self.sound.preparing;
-        let hear_label = if self.sound.preparing { "Even wachten…" } else { "Hoor de zin" };
+        let hear_tip = if self.sound.preparing { "Even wachten…" } else { "Hoor de zin (H)" };
 
-        let tool = |id: &'static str, icon: Icon, label: &str, key: &str, cx: &App| {
-            Button::new(id).outline().tab_stop(false).icon(icon).child(h_flex().gap_2().child(label.to_string()).child(keycap(key, cx)))
-        };
         let test = (self.study.mode == Mode::Read).then(|| {
-            let mut btn = tool("test-reading", icons::speak(), attempt.test_label(), "Spatie", cx)
+            let (icon, tip) = attempt.test_tool();
+            let mut btn = tool_button("test-reading", icon, tip)
                 .disabled(!self.listener.is_installed() || attempt.judging)
                 .on_click(self.study_click(Self::advance, cx));
             if recording {
@@ -417,19 +418,16 @@ impl FlashcardsApp {
             }
             btn
         });
-        let mut hear = tool("hear", icons::listen(), hear_label, "H", cx)
+        let mut hear = tool_button("hear", icons::listen(), hear_tip)
             .disabled(self.busy_listening())
             .on_click(self.study_click(|this, cx| this.hear(Speed::Normal, cx), cx));
         if audio_active {
             hear = hear.primary();
         }
-        let slow = Button::new("hear-slow")
-            .outline()
-            .tab_stop(false)
+        let slow = tool_button("hear-slow", icons::slow(), "Langzaam (L)")
             .disabled(self.busy_listening())
-            .child(h_flex().gap_1p5().child("Langzaam").child(keycap("L", cx)))
             .on_click(self.study_click(|this, cx| this.hear(Speed::Slow, cx), cx));
-        let mut meaning = tool("meaning", icons::meaning(), "Betekenis", "V", cx)
+        let mut meaning = tool_button("meaning", icons::meaning(), "Betekenis (V)")
             .on_click(self.study_click(Self::toggle_english, cx));
         if attempt.english_shown {
             meaning = meaning.primary();
@@ -482,6 +480,7 @@ impl FlashcardsApp {
         let now = Self::now();
         let next_due = self.store.next_due_after(now).ok().flatten().map(|due| describe_due(due, now));
         let rest = Rest::new(self.deck.cards.len(), self.drafts.len(), self.study.reviewed_today, next_due);
+        let stats: Vec<_> = rest.stats.into_iter().enumerate().map(|(i, (icon, value, tip))| stat(("rest-stat", i as u64), icon, value, tip, cx)).collect();
         v_flex()
             .flex_1()
             .items_center()
@@ -492,16 +491,11 @@ impl FlashcardsApp {
                     .max_w(px(520.))
                     .px_6()
                     .pb_6()
+                    .gap_4()
                     .items_center()
-                    .child(empty_state(rest.title, &rest.detail, cx))
-                    .when_some(rest.action, |d, (label, screen)| {
-                        d.child(
-                            Button::new("empty-action")
-                                .primary()
-                                .label(label)
-                                .on_click(cx.listener(move |this, _, window, cx| this.show(screen, window, cx))),
-                        )
-                    }),
+                    .child(empty_state(rest.icon, rest.title, rest.detail, cx))
+                    .when(!stats.is_empty(), |d| d.child(h_flex().flex_wrap().justify_center().gap_5().children(stats)))
+                    .child(h_flex().gap_2().children(go_buttons(rest.actions, cx))),
             )
     }
 }

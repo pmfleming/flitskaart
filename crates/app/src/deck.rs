@@ -4,7 +4,7 @@ use dutch_flashcards_core::schedule::describe_due;
 use dutch_flashcards_core::{Card, CardId, Status};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme as _, Colorize as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Colorize as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, AppContext as _, Context, Div, Entity, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent,
@@ -14,7 +14,7 @@ use gpui_kit::{
 use crate::app::FlashcardsApp;
 use crate::drafts::DraftRow;
 use crate::icons;
-use crate::ui::{card_box, empty_state, field_label, hint, pill, segment_button, segmented_bar};
+use crate::ui::{card_box, empty_state, explained, icon_button, pill, segment_button, segmented_bar};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DeckFilter {
@@ -34,6 +34,15 @@ impl DeckFilter {
             DeckFilter::Due => "Te herhalen",
             DeckFilter::New => "Nieuw",
             DeckFilter::Suspended => "Gepauzeerd",
+        }
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            DeckFilter::All => icons::deck(),
+            DeckFilter::Due => icons::due(),
+            DeckFilter::New => icons::new(),
+            DeckFilter::Suspended => icons::pause(),
         }
     }
 
@@ -98,12 +107,11 @@ enum DeckAction {
 }
 
 /// Column widths after Nederlands: Volgende keer, Fout, Vertaling, Uitspraak, Actions.
-const COL_DUE: f32 = 104.;
+const COL_DUE: f32 = 96.;
 const COL_MISSES: f32 = 46.;
-const COL_PEEKS: f32 = 64.;
-const COL_SPEECH: f32 = 68.;
-const COL_ACTIONS: f32 = 248.;
-const COL_ACTIONS_COMPACT: f32 = 224.;
+const COL_PEEKS: f32 = 46.;
+const COL_SPEECH: f32 = 52.;
+const COL_ACTIONS: f32 = 150.;
 
 impl FlashcardsApp {
     pub fn reload_deck(&mut self) {
@@ -166,27 +174,29 @@ impl FlashcardsApp {
         let visible: Vec<&Card> = self.deck.cards.iter().filter(|card| self.deck.filter.matches(card, now)).collect();
         let theme = cx.theme().clone();
 
-        let count_text = if visible.len() == self.deck.cards.len() {
-            format!("{} kaarten", self.deck.cards.len())
-        } else {
-            format!("{} van {} kaarten", visible.len(), self.deck.cards.len())
-        };
-
+        // Each filter shows how many cards it holds, and its name on hover.
         let filters = segmented_bar(cx).children(DeckFilter::ALL.map(|filter| {
-            segment_button(filter.id(), filter.label(), self.deck.filter == filter, cx).on_click(cx.listener(move |this, _, _, cx| {
-                this.deck.filter = filter;
-                cx.notify();
-            }))
+            let count = self.deck.cards.iter().filter(|card| filter.matches(card, now)).count();
+            segment_button(filter.id(), count.to_string(), self.deck.filter == filter, cx)
+                .icon(filter.icon())
+                .tooltip(filter.label())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.deck.filter = filter;
+                    cx.notify();
+                }))
         }));
+        let search_icon = div().text_color(theme.muted_foreground).child(icons::search().size_4());
 
         let controls = h_flex()
             .flex_wrap()
             .items_center()
             .gap_3()
-            .child(div().flex_1().min_w(px(220.)).child(Input::new(&self.deck.search)))
-            .child(filters)
-            .child(hint(count_text, cx));
+            .child(div().flex_1().min_w(px(220.)).child(Input::new(&self.deck.search).prefix(search_icon)))
+            .child(filters);
 
+        let column = |name: &'static str, width: f32, icon: Icon, tip: &'static str| {
+            explained(name, tip).w(px(width)).flex().justify_end().child(icon.size_4())
+        };
         let header = h_flex()
             .gap_3()
             .px_3()
@@ -197,24 +207,24 @@ impl FlashcardsApp {
             .text_xs()
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.muted_foreground)
-            .child(div().flex_1().min_w_0().child("Nederlands"))
-            .child(div().w(px(COL_DUE)).child("Volgende keer"))
+            .child(div().flex_1().min_w_0().child(explained("col-dutch", "Nederlands").child(icons::dutch().size_4())))
+            .child(explained("col-due", "Volgende keer").w(px(COL_DUE)).child(icons::due().size_4()))
             .when(!compact, |d| {
-                d.child(div().w(px(COL_MISSES)).text_right().child("Fout"))
-                    .child(div().w(px(COL_PEEKS)).text_right().child("Vertaling"))
-                    .child(div().w(px(COL_SPEECH)).text_right().child("Uitspraak"))
+                d.child(column("col-misses", COL_MISSES, icons::miss(), "Zo vaak fout"))
+                    .child(column("col-peeks", COL_PEEKS, icons::meaning(), "Zo vaak de vertaling bekeken"))
+                    .child(column("col-speech", COL_SPEECH, icons::speak(), "Uitspraak: hoeveel de app verstond"))
             })
-            .child(div().w(px(if compact { COL_ACTIONS_COMPACT } else { COL_ACTIONS })));
+            .child(div().w(px(COL_ACTIONS)));
 
         let body = if visible.is_empty() {
-            let (title, detail) = if self.deck.cards.is_empty() && self.deck.query.trim().is_empty() {
-                ("Nog geen kaarten", "Kaarten die je bij Concepten bewaart, verschijnen hier.")
+            let (icon, title) = if self.deck.cards.is_empty() && self.deck.query.trim().is_empty() {
+                (icons::deck(), "Nog geen kaarten")
             } else if self.deck.filter != DeckFilter::All && self.deck.query.trim().is_empty() {
-                ("Geen kaarten in dit filter", "Kies een ander filter om je kaarten te zien.")
+                (self.deck.filter.icon(), "Geen kaarten in dit filter")
             } else {
-                ("Niets gevonden", "Probeer een ander woord of filter.")
+                (icons::search(), "Niets gevonden")
             };
-            v_flex().flex_1().items_center().justify_center().child(empty_state(title, detail, cx)).into_any_element()
+            v_flex().flex_1().items_center().justify_center().child(empty_state(icon, title, "", cx)).into_any_element()
         } else {
             let rows: Vec<_> = visible
                 .into_iter()
@@ -282,7 +292,7 @@ impl FlashcardsApp {
             })
             .child(
                 h_flex()
-                    .w(px(if compact { COL_ACTIONS_COMPACT } else { COL_ACTIONS }))
+                    .w(px(COL_ACTIONS))
                     .justify_end()
                     .child(self.render_row_actions(card, cx)),
             )
@@ -290,11 +300,14 @@ impl FlashcardsApp {
 
     fn render_due_cell(&self, card: &Card, now: chrono::DateTime<chrono::Utc>, cx: &App) -> Div {
         let theme = cx.theme();
+        let mark = |name: &'static str, icon: Icon, tip: &'static str, color| {
+            h_flex().child(explained((name, card.id as u64), tip).text_color(color).child(icon.size_4()))
+        };
         if card.status == Status::Suspended {
-            return h_flex().child(pill("gepauzeerd", theme.secondary, theme.muted_foreground));
+            return mark("due-paused", icons::pause(), "Gepauzeerd", theme.muted_foreground);
         }
         if card.is_new() {
-            return h_flex().child(pill("nieuw", theme.accent, theme.accent_foreground));
+            return mark("due-new", icons::new(), "Nieuw", theme.primary);
         }
         let text = card.due.map(|due| describe_due(due, now)).unwrap_or_default();
         if text == "nu" {
@@ -308,31 +321,26 @@ impl FlashcardsApp {
     fn render_row_actions(&self, card: &Card, cx: &mut Context<Self>) -> impl IntoElement {
         let id = card.id;
         let dutch = card.dutch.clone();
-        let action = |name: &'static str, label: &'static str| Button::new((name, id as u64)).ghost().xsmall().label(label);
+        let action = |name: &'static str, icon: Icon, tip: &'static str| icon_button((name, id as u64), icon, tip);
         if self.deck.confirm_delete == Some(id) {
             return h_flex()
                 .gap_1()
                 .items_center()
                 .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(cx.theme().danger).child("Verwijderen?"))
                 .child(Button::new(("delete-yes", id as u64)).danger().xsmall().label("Ja").on_click(Self::run_action(id, DeckAction::Delete, cx)))
-                .child(action("delete-no", "Nee").on_click(cx.listener(|this, _, _, cx| this.confirm_delete(None, cx))));
+                .child(Button::new(("delete-no", id as u64)).ghost().xsmall().label("Nee").on_click(cx.listener(|this, _, _, cx| this.confirm_delete(None, cx))));
         }
         let suspended = card.status == Status::Suspended;
-        let (pause_label, pause) = if suspended { ("Hervat", DeckAction::Resume) } else { ("Pauzeer", DeckAction::Suspend) };
+        let (pause_icon, pause_tip, pause) =
+            if suspended { (icons::resume(), "Hervatten", DeckAction::Resume) } else { (icons::pause(), "Pauzeren", DeckAction::Suspend) };
         h_flex()
             .gap_0p5()
             .items_center()
-            .child(
-                Button::new(("deck-listen", id as u64))
-                    .ghost()
-                    .xsmall()
-                    .icon(icons::listen())
-                    .on_click(cx.listener(move |this, _, _, cx| this.say(dutch.clone(), cx))),
-            )
-            .child(action("edit", "Bewerken").on_click(cx.listener(move |this, _, window, cx| this.start_editing(id, window, cx))))
-            .child(action("pause", pause_label).on_click(Self::run_action(id, pause, cx)))
-            .when(!card.is_new(), |d| d.child(action("reset", "Opnieuw").on_click(Self::run_action(id, DeckAction::Reset, cx))))
-            .child(action("delete", "Verwijder").on_click(cx.listener(move |this, _, _, cx| this.confirm_delete(Some(id), cx))))
+            .child(action("deck-listen", icons::listen(), "Luister").on_click(cx.listener(move |this, _, _, cx| this.say(dutch.clone(), cx))))
+            .child(action("edit", icons::edit(), "Bewerken").on_click(cx.listener(move |this, _, window, cx| this.start_editing(id, window, cx))))
+            .child(action("pause", pause_icon, pause_tip).on_click(Self::run_action(id, pause, cx)))
+            .when(!card.is_new(), |d| d.child(action("reset", icons::retry(), "Opnieuw leren").on_click(Self::run_action(id, DeckAction::Reset, cx))))
+            .child(action("delete", icons::trash(), "Verwijderen").on_click(cx.listener(move |this, _, _, cx| this.confirm_delete(Some(id), cx))))
     }
 
     fn run_action<E>(id: CardId, action: DeckAction, cx: &mut Context<Self>) -> impl Fn(&E, &mut Window, &mut App) + 'static {
@@ -356,7 +364,6 @@ impl FlashcardsApp {
             .bg(theme.muted)
             .on_key_down(cx.listener(Self::on_edit_key))
             .child(row.fields(true, cx))
-            .child(v_flex().gap_1().w(px(280.)).child(field_label("Onderwerp", cx)).child(Input::new(&row.tags).small()))
             .child(
                 h_flex()
                     .justify_between()
@@ -366,11 +373,11 @@ impl FlashcardsApp {
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(Button::new("edit-cancel").outline().small().label("Annuleren").on_click(cx.listener(|this, _, _, cx| {
+                            .child(Button::new("edit-cancel").ghost().small().label("Annuleren").on_click(cx.listener(|this, _, _, cx| {
                                 this.deck.editing = None;
                                 cx.notify();
                             })))
-                            .child(Button::new("edit-save").primary().small().label("Opslaan").on_click(cx.listener(|this, _, _, cx| this.save_edit(cx)))),
+                            .child(Button::new("edit-save").primary().small().icon(icons::check()).label("Opslaan").on_click(cx.listener(|this, _, _, cx| this.save_edit(cx)))),
                     ),
             )
     }

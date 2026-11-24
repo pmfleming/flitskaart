@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Aanwijzing: a signpost -->
+  <path d="M12 3v18M9 21h6" />
+  <path d="M12 5h6.5l2 2.25-2 2.25H12M12 12H5.5l-2 2.25 2 2.25H12" />
+</svg>

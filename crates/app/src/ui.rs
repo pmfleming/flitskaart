@@ -2,9 +2,12 @@
 
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::theme::Theme;
-use gpui_kit::component::{ActiveTheme as _, Colorize as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::component::{ActiveTheme as _, Colorize as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    App, Div, ElementId, FontWeight, Hsla, ParentElement as _, SharedString, Styled as _, div, hsla, px,
+    App, Div, ElementId, FontWeight, Hsla, InteractiveElement as _, ParentElement as _, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, div, hsla, px,
 };
 
 fn hex(color: u32) -> Hsla {
@@ -172,11 +175,6 @@ pub fn pill(text: impl Into<SharedString>, bg: Hsla, fg: Hsla) -> Div {
         .child(text.into())
 }
 
-/// A subtle field label placed above inputs.
-pub fn field_label(text: impl Into<SharedString>, cx: &App) -> Div {
-    div().text_xs().font_weight(FontWeight::MEDIUM).text_color(cx.theme().muted_foreground).child(text.into())
-}
-
 /// Container for a connected segmented control.
 pub fn segmented_bar(cx: &App) -> Div {
     let theme = cx.theme();
@@ -299,22 +297,65 @@ pub fn heading(text: impl Into<SharedString>) -> Div {
     div().text_lg().font_weight(FontWeight::SEMIBOLD).child(text.into())
 }
 
-/// A titled section card with its explanation; add the controls as children.
-pub fn section(title: &str, explanation: impl Into<SharedString>, cx: &App) -> Div {
-    card_box(cx)
-        .p_4()
-        .gap_3()
-        .child(v_flex().gap_1().child(heading(title.to_string())).child(hint(explanation, cx)))
+/// A heading with its icon in front.
+pub fn titled(icon: Icon, text: impl Into<SharedString>, cx: &App) -> Div {
+    h_flex().items_center().gap_2().child(icon.size_5().text_color(cx.theme().primary)).child(heading(text))
 }
 
-/// A centred message for empty screens, with optional detail.
-pub fn empty_state(title: &str, detail: &str, cx: &App) -> Div {
-    div()
+/// A section card under its icon and title; add the controls as children.
+pub fn section(icon: Icon, title: &str, cx: &App) -> Div {
+    card_box(cx).p_4().gap_3().child(titled(icon, title.to_string(), cx))
+}
+
+/// A small icon-only button that names itself on hover.
+pub fn icon_button(id: impl Into<ElementId>, icon: Icon, tip: impl Into<SharedString>) -> Button {
+    // A custom size draws the icon at three quarters of it.
+    Button::new(id).ghost().with_size(px(26.)).tab_stop(false).icon(icon).tooltip(tip)
+}
+
+/// One of a screen's main tools: an outlined icon button, named on hover.
+pub fn tool_button(id: impl Into<ElementId>, icon: Icon, tip: impl Into<SharedString>) -> Button {
+    Button::new(id).outline().tab_stop(false).w(px(44.)).h(px(40.)).child(icon.size(px(20.))).tooltip(tip)
+}
+
+/// Something that says what it is on hover, such as an icon or a count.
+pub fn explained(id: impl Into<ElementId>, tip: impl Into<SharedString>) -> Stateful<Div> {
+    let tip = tip.into();
+    div().id(id).tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+}
+
+/// A muted icon and a number, with what it counts on hover.
+pub fn stat(id: impl Into<ElementId>, icon: Icon, value: impl Into<SharedString>, tip: impl Into<SharedString>, cx: &App) -> Stateful<Div> {
+    explained(id, tip)
         .flex()
-        .flex_col()
+        .items_center()
+        .gap_1()
+        .text_sm()
+        .text_color(cx.theme().muted_foreground)
+        .child(icon.size_4())
+        .child(value.into())
+}
+
+/// A centred picture and message for empty screens, with optional detail.
+pub fn empty_state(icon: Icon, title: &str, detail: &str, cx: &App) -> Div {
+    let theme = cx.theme();
+    v_flex()
         .items_center()
         .gap_2()
-        .py_10()
+        .pt_8()
+        .pb_4()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(64.))
+                .mb_2()
+                .rounded_full()
+                .bg(theme.accent)
+                .text_color(theme.accent_foreground)
+                .child(icon.size(px(32.))),
+        )
         .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(title.to_string()))
-        .child(hint(detail.to_string(), cx).max_w(px(460.)).text_center())
+        .when(!detail.is_empty(), |d| d.child(hint(detail.to_string(), cx).max_w(px(420.)).text_center()))
 }

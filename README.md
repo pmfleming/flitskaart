@@ -9,17 +9,18 @@ press `V`.
 
 ## Studying
 
-Each card is one panel: the Dutch, three buttons, and the four scores. Use the
-buttons in any order, or none of them.
+Each card is one panel: the Dutch, a row of icon buttons, and the four scores.
+The buttons have no text; hovering one shows its name and key. Use them in any
+order, or none of them.
 
-- **Test mijn uitspraak** (`Space`) – read the card aloud. Recording stops by
+- **Test mijn uitspraak** (speech bubble, `Space`) – read the card aloud. Recording stops by
   itself when you finish. Whisper, running on this laptop, writes down what it
   heard and the app grades how understandable you were from 1 to 4; words it
-  missed are underlined in the card. The button then reads **Opnieuw** for
-  another try; the latest try counts.
-- **Hoor de zin** (`H`) – the sentence in the Dutch voice chosen in
-  Instellingen. Listening never changes how the review counts.
-- **Betekenis** (`V`) – the English and the note.
+  missed are underlined in the card, and the sound-into-text mark shows what
+  Whisper heard. Press it again for another try; the latest try counts.
+- **Hoor de zin** (ear, `H`) and **Langzaam** (snail, `L`) – the sentence in
+  the Dutch voice chosen in Instellingen. Listening never changes how the review counts.
+- **Betekenis** (two cards, `V`) – the English and the note.
 - **Weet ik niet / Moeilijk / Gaat goed / Makkelijk** (`1`–`4`) – how easily
   the sentence came back. This saves the review and shows the next card.
 
@@ -94,15 +95,20 @@ you close the app.
 
 ## Screens
 
+Every screen keeps its text short: tabs, buttons, column headings and counts
+carry the app's own icons, and hovering one shows what it means.
+
 - **Oefenen** – study.
 - **Gesprek** – a conversation with Claude that becomes cards (above).
 - **Toevoegen** – paste a snippet. Corrections of your own mistakes become cards
   first, then new phrases and words. An optional line steers it ("alleen de
   correcties", "max 3 kaarten"). Lines typed as `Nederlands | English | uitleg`
   skip Claude.
-- **Concepten** – edit, listen to, keep or discard each draft. Duplicates are flagged.
+- **Concepten** – edit, listen to, keep or discard each draft. Each field is
+  marked by an icon (NL, bulb for the note, two cards for the English, label for
+  the topic). Duplicates are flagged.
 - **Kaarten** – search, edit, pause, reset or delete cards; see misses and
-  how often you looked at the English.
+  how often you looked at the English. The filters show how many cards each holds.
 - **Instellingen** – male or female voice, a microphone test, light/dark/system
   colours, new cards per day. The Microfoon section names the microphone the
   sound comes from (read from PipeWire with `pw-dump`: Bluetooth, USB or the

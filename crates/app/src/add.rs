@@ -12,7 +12,8 @@ use gpui_kit::{
 };
 
 use crate::app::{FlashcardsApp, Screen};
-use crate::ui::{card_box, field_label, heading, hint, keycap_primary, pill};
+use crate::icons;
+use crate::ui::{card_box, explained, hint, keycap_primary, titled};
 
 const STEER_PRESETS: [&str; 3] = ["alleen de correcties", "max 3 kaarten", "alleen nieuwe woorden"];
 
@@ -30,7 +31,7 @@ impl AddState {
                 TextareaState::new(window, cx)
                     .placeholder("Plak hier een stuk van je gesprek met Claude, ChatGPT of Gemini…")
             }),
-            steer: cx.new(|cx| InputState::new(window, cx).placeholder("bijvoorbeeld: alleen de correcties, of: max 3 kaarten")),
+            steer: cx.new(|cx| InputState::new(window, cx).placeholder("Aanwijzing, bijvoorbeeld: max 3 kaarten")),
             busy: false,
             error: None,
         }
@@ -129,16 +130,26 @@ impl FlashcardsApp {
             .flatten();
 
         let status = if self.add.busy {
-            hint("Claude maakt kaarten… dit duurt meestal 5 tot 15 seconden.", cx)
+            hint("Claude maakt kaarten…", cx).into_any_element()
         } else if let Some(count) = manual_count {
-            let label = if count == 1 {
-                "1 handmatige kaart herkend · direct zonder Claude".to_string()
-            } else {
-                format!("{count} handmatige kaarten herkend · direct zonder Claude")
-            };
-            pill(label, theme.accent, theme.accent_foreground)
+            let label = if count == 1 { "1 kaart, zonder Claude".to_string() } else { format!("{count} kaarten, zonder Claude") };
+            h_flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py(px(1.5))
+                .rounded_full()
+                .bg(theme.accent)
+                .text_color(theme.accent_foreground)
+                .text_xs()
+                .child(icons::check().size_3p5())
+                .child(label)
+                .into_any_element()
         } else {
-            hint("Tip: regels als Nederlands | English | uitleg gaan direct zonder Claude.", cx)
+            explained("manual-tip", "Regels als  Nederlands | English | uitleg  worden direct kaarten, zonder Claude.")
+                .text_color(theme.muted_foreground)
+                .child(icons::tip().size_5())
+                .into_any_element()
         };
 
         let presets = h_flex().flex_wrap().gap_1p5().children(STEER_PRESETS.map(|preset| {
@@ -151,13 +162,14 @@ impl FlashcardsApp {
                     cx.notify();
                 }))
         }));
+        let steer_icon = explained("steer-tip", "Aanwijzing voor Claude (optioneel)").text_color(theme.muted_foreground).child(icons::steer().size_4());
 
-        let button_label = if self.add.busy { "Bezig…" } else { "Maak kaarten" };
         let submit = Button::new("make")
             .primary()
             .loading(self.add.busy)
             .disabled(self.add.busy)
-            .child(h_flex().gap_2().child(button_label).when(!self.add.busy, |d| d.child(keycap_primary("Ctrl+Enter", cx))))
+            .when(!self.add.busy, |b| b.icon(icons::cards()))
+            .child(h_flex().gap_2().child("Maak kaarten").when(!self.add.busy, |d| d.child(keycap_primary("Ctrl+Enter", cx))))
             .on_click(cx.listener(|this, _, window, cx| this.make_cards(window, cx)));
 
         v_flex()
@@ -176,34 +188,15 @@ impl FlashcardsApp {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(heading("Kaarten maken van een gesprek"))
-                            .child(hint(
-                                "Plak een stuk van een gesprek. Correcties van je eigen fouten worden eerst kaarten, daarna nieuwe zinnen en woorden.",
-                                cx,
-                            )),
+                            .child(titled(icons::paste(), "Kaarten van een gesprek", cx))
+                            .child(hint("Correcties eerst, dan zinnen en woorden.", cx)),
                     )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_h(px(120.))
-                            .max_h(px(400.))
-                            .gap_1()
-                            .child(field_label("Gesprek of losse regels", cx))
-                            .child(Textarea::new(&self.add.snippet).flex_1().min_h(px(100.))),
-                    )
+                    .child(Textarea::new(&self.add.snippet).flex_1().min_h(px(100.)).max_h(px(400.)))
                     .child(
                         v_flex()
                             .gap_1p5()
-                            .child(
-                                h_flex()
-                                    .justify_between()
-                                    .items_center()
-                                    .flex_wrap()
-                                    .gap_2()
-                                    .child(field_label("Aanwijzing (optioneel)", cx))
-                                    .child(presets),
-                            )
-                            .child(Input::new(&self.add.steer)),
+                            .child(Input::new(&self.add.steer).prefix(steer_icon))
+                            .child(presets),
                     )
                     .child(h_flex().flex_wrap().items_center().gap_3().child(submit).child(status))
                     .when_some(self.add.error.clone(), |d, error| d.child(div().text_sm().text_color(theme.danger).child(error))),

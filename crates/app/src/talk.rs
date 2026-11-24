@@ -27,7 +27,7 @@ use crate::app::FlashcardsApp;
 use crate::capture::Capture;
 use crate::icons;
 use crate::recorder::Captured;
-use crate::ui::{card_box, heading, pill, surface};
+use crate::ui::{card_box, heading, icon_button, pill, surface, titled};
 
 /// A topic's name and its icon.
 pub type Topic = (&'static str, fn() -> Icon);
@@ -236,7 +236,7 @@ impl FlashcardsApp {
     fn play_button(&self, id: impl Into<ElementId>, text: &str, speed: Speed, cx: &mut Context<Self>) -> Button {
         let text = SharedString::from(text.to_string());
         let (icon, tip) = if speed == Speed::Slow { (icons::slow(), "Langzaam") } else { (icons::listen(), "Luister") };
-        tool(id, icon, tip).on_click(cx.listener(move |this, _, _, cx| this.play(text.clone(), speed, cx)))
+        icon_button(id, icon, tip).on_click(cx.listener(move |this, _, _, cx| this.play(text.clone(), speed, cx)))
     }
 
     /// A sentence with the ear before it and `tools` after it; clicking the
@@ -363,7 +363,7 @@ impl FlashcardsApp {
                 .max_w(px(620.))
                 .p_6()
                 .gap_5()
-                .child(heading("Waar wil je over praten?"))
+                .child(titled(icons::talk(), "Waar wil je over praten?", cx))
                 .child(div().grid().grid_cols(3).gap_3().children(tiles))
                 .child(own)
                 .child(h_flex().flex_wrap().justify_center().gap_5().text_color(theme.muted_foreground).children(how))
@@ -432,7 +432,7 @@ impl FlashcardsApp {
     /// words the learner didn't understand.
     fn render_partner_text(&self, index: usize, line: &Line, cx: &mut Context<Self>) -> Div {
         let slow = self.play_button(("line-slow", index as u64), &line.dutch, Speed::Slow, cx);
-        let meaning = tool(("line-meaning", index as u64), icons::meaning(), "Betekenis")
+        let meaning = icon_button(("line-meaning", index as u64), icons::meaning(), "Betekenis")
             .when(line.meaning_shown, |button| button.outline().primary())
             .on_click(cx.listener(move |this, _, _, cx| this.change_line(index, Conversation::toggle_meaning, cx)));
         let unclear: Vec<_> = line
@@ -522,7 +522,7 @@ impl FlashcardsApp {
         let theme = cx.theme().clone();
         let said = self.talk.pending.as_ref().map(|said| {
             let retry = (!self.talk.thinking)
-                .then(|| tool("talk-resend", icons::retry(), "Opnieuw versturen").outline().on_click(cx.listener(|this, _, _, cx| this.resend(cx))));
+                .then(|| icon_button("talk-resend", icons::retry(), "Opnieuw versturen").outline().on_click(cx.listener(|this, _, _, cx| this.resend(cx))));
             h_flex()
                 .w_full()
                 .justify_end()
@@ -573,12 +573,6 @@ impl FlashcardsApp {
 
 /// How far text under a sentence is indented, to line up with the sentence after its ear.
 const INDENT: gpui_kit::Pixels = px(30.);
-
-/// A small icon-only button that names itself on hover.
-fn tool(id: impl Into<ElementId>, icon: Icon, tip: &'static str) -> Button {
-    // A custom size draws the icon at three quarters of it.
-    Button::new(id).ghost().with_size(px(26.)).tab_stop(false).icon(icon).tooltip(tip)
-}
 
 /// The topic's own icon, or the speech bubble for any other topic.
 fn topic_icon(topic: &str) -> Icon {
